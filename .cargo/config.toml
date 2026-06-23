@@ -1,0 +1,3 @@
+# Este archivo está vacío intencionalmente.
+# El target por defecto (MSVC) se usa sin necesidad de configuración adicional.
+# Cuando las Build Tools de Visual C++ estén instaladas, cargo build funcionará directamente.

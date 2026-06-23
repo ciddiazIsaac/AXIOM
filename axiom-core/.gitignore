@@ -1,0 +1,40 @@
+# Rust build artifacts
+/target/
+
+# Cargo lock (se incluye para binarios, no para libraries)
+# Para libraries, el Cargo.lock es opcional — lo incluimos para reproducibilidad exacta
+# Cargo.lock  ← descomentado si quieres ignorarlo
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test outputs
+/did_store/
+*.did.json
+
+# Coverage reports
+/coverage/
+lcov.info
+
+# Profiling
+perf.data
+perf.data.old
+flamegraph.svg
+
+# WASM output
+/pkg/
+/wasm-pack.log
+
+# Environment secrets (¡NUNCA en git!)
+.env
+.env.local
+*.pem
+*.key
+*.p12

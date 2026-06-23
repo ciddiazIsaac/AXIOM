@@ -1,0 +1,54 @@
+[package]
+name = "axiom-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Isaac Ciddiaz <ciddiazisaac2024@gmail.com>"]
+description = "Titanium Core — Hybrid PQC cryptography and DID:axiom W3C implementation"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ciddiazIsaac/AXIOM"
+keywords = ["did", "cryptography", "post-quantum", "kyber", "ed25519"]
+categories = ["cryptography", "authentication"]
+readme = "README.md"
+
+[lib]
+name = "axiom_core"
+crate-type = ["lib", "cdylib"]  # cdylib para futura compilación WASM
+
+[dependencies]
+# --- Criptografía Clásica ---
+ed25519-dalek = { version = "2.1", features = ["rand_core", "zeroize"] }
+
+# --- Criptografía Poscuántica (CRYSTALS-Kyber / ML-KEM-768) ---
+pqcrypto-kyber = { version = "0.8" }
+pqcrypto-traits = "0.3"
+
+# --- Serialización (JSON-LD DID Documents) ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# --- Seguridad de Memoria: borrado seguro de claves privadas ---
+zeroize = { version = "1.8", features = ["derive"] }
+
+# --- Encoding ---
+base64 = "0.22"
+multibase = "0.9"
+multihash = "0.19"
+
+# --- Utilidades ---
+thiserror = "1"
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"   # Reduce tamaño binario, mejora seguridad en WASM
+strip = true

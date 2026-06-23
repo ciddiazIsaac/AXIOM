@@ -1,0 +1,11 @@
+C:\Users\icidd\Desktop\Proyectos\AXIOM\target\debug\deps\multibase-53ae313c3ce457df.d: C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\lib.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\base.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\encoding.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\error.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\impls.rs
+
+C:\Users\icidd\Desktop\Proyectos\AXIOM\target\debug\deps\libmultibase-53ae313c3ce457df.rlib: C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\lib.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\base.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\encoding.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\error.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\impls.rs
+
+C:\Users\icidd\Desktop\Proyectos\AXIOM\target\debug\deps\libmultibase-53ae313c3ce457df.rmeta: C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\lib.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\base.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\encoding.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\error.rs C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\impls.rs
+
+C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\lib.rs:
+C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\base.rs:
+C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\encoding.rs:
+C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\error.rs:
+C:\Users\icidd\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\multibase-0.9.2\src\impls.rs:
