@@ -32,6 +32,7 @@ pub mod crypto;
 pub mod did;
 pub mod error;
 pub mod keys;
+pub mod pdp;
 
 pub use error::AxiomError;
 pub use keys::HybridKeyPair;

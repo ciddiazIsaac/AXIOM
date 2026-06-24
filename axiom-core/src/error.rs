@@ -36,4 +36,8 @@ pub enum AxiomError {
     /// Error de encoding/decoding (base64, multibase, etc.).
     #[error("Encoding error: {0}")]
     Encoding(String),
+
+    /// Error interno genérico (PDP, etc).
+    #[error("Internal error: {0}")]
+    InternalError(String),
 }
