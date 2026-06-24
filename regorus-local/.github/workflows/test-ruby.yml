@@ -1,0 +1,44 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+#
+name: bindings/ruby
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    if: false # temporarily disabled
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup Ruby and Rust
+        uses: oxidize-rb/actions/setup-ruby-and-rust@e5f9a49a7812a078584072f6e3f657ad247c8771 # v1.26
+        with:
+          bundler: 2.6.5
+          rubygems: 3.6.5
+          ruby-version: "3.4.2"
+          rustup-toolchain: "stable"
+          bundler-cache: true
+          cargo-cache: true
+          working-directory: "bindings/ruby"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ${{ runner.os }}-regorus
+
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+
+      - name: Fetch Ruby crate dependencies
+        run: cargo fetch --locked --manifest-path bindings/ruby/Cargo.toml
+
+      - name: Run ruby tests
+        run: cargo xtask test-ruby --release --frozen

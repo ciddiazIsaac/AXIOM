@@ -1,0 +1,53 @@
+[workspace]
+
+[package]
+name = "regorus-ffi"
+version = "0.10.1"
+edition = "2021"
+license = "MIT AND Apache-2.0 AND BSD-3-Clause"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+anyhow = "1.0"
+regorus = { path  = "../..", default-features = false }
+serde_json = "1.0.150"
+parking_lot = { version = "0.12", optional = true }
+
+[profile.release]
+# Enable full debug info for optimized builds.
+debug = "full"
+# Split debuginfo into its own file to reduce binary size.
+split-debuginfo = "packed"
+lto = true
+codegen-units = 1
+
+[features]
+default = [
+	"ast",
+	"azure_policy",
+	"std",
+	"coverage",
+	"allocator-memory-limits",
+	"rvm",
+	"rbac",
+	"regorus/arc",
+	"regorus/full-opa",
+	"cache",
+	"contention_checks",
+]
+ast = ["regorus/ast"]
+azure_policy = ["regorus/azure_policy"]
+std = ["regorus/std"]
+coverage = ["regorus/coverage"]
+allocator-memory-limits = ["regorus/allocator-memory-limits"]
+contention_checks = ["parking_lot"]
+rvm = ["regorus/rvm"]
+rbac = ["regorus/azure-rbac"]
+cache = ["regorus/cache"]
+custom_allocator = []
+
+[build-dependencies]
+cbindgen = "0.29.2"

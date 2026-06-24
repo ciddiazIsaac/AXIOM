@@ -1,6 +1,9 @@
 [workspace]
 members = [
-    "axiom-core",
+    "axiom-core", "pdp-server",
+]
+exclude = [
+    "regorus-local",
 ]
 resolver = "2"
 

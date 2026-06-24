@@ -1,0 +1,719 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+use std::collections::HashSet;
+use std::fs::{self, File};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::{anyhow, Context, Result};
+use clap::Args;
+
+use super::ffi;
+use crate::tasks::util::{dotnet_host_arch, run_command, workspace_root};
+use zip::read::ZipArchive;
+
+/// Builds the Regorus C# NuGet package from local sources.
+#[derive(Args, Clone)]
+pub struct BuildNugetCommand {
+    /// Build the Rust FFI artefacts for the provided target triple (defaults to the host).
+    #[arg(long = "target", value_name = "TRIPLE")]
+    pub targets: Vec<String>,
+
+    /// Build the package in release mode (defaults to debug).
+    #[arg(long)]
+    pub release: bool,
+
+    /// Remove existing build artefacts before compiling.
+    #[arg(long)]
+    pub clean: bool,
+
+    /// Override the directory that contains compiled regorus FFI artefacts.
+    #[arg(long, value_name = "PATH")]
+    pub artifacts_dir: Option<PathBuf>,
+
+    /// Require all platform artefacts to exist before packing.
+    #[arg(long)]
+    pub enforce_artifacts: bool,
+
+    /// Include repository commit metadata in the package.
+    #[arg(long = "repository-commit", value_name = "SHA")]
+    pub repository_commit: Option<String>,
+
+    /// Build a symbols package (snupkg).
+    #[arg(long)]
+    pub include_symbols: bool,
+}
+
+/// Parsed build options shared across tasks that need a NuGet package.
+#[derive(Clone, Debug)]
+pub struct BuildNugetConfig {
+    pub targets: Vec<String>,
+    pub release: bool,
+    pub clean: bool,
+    pub artifacts_dir: Option<PathBuf>,
+    pub enforce_artifacts: bool,
+    pub repository_commit: Option<String>,
+    pub include_symbols: bool,
+}
+
+/// Result of a NuGet build, including generated artefacts.
+#[derive(Debug)]
+pub struct BuildNugetResult {
+    pub package_dir: PathBuf,
+    pub packages: Vec<PathBuf>,
+}
+
+/// Builds (or rebuilds) the C# NuGet package with the supplied configuration.
+pub fn build_nuget_package(config: &BuildNugetConfig) -> Result<BuildNugetResult> {
+    let workspace_root = workspace_root();
+    let configuration = if config.release { "Release" } else { "Debug" };
+    let profile = ffi::profile_dir(config.release);
+
+    let base_artifacts_dir = if let Some(dir) = &config.artifacts_dir {
+        if !config.targets.is_empty() {
+            println!("Skipping FFI build for specified targets because --artifacts-dir is set.");
+        }
+        dir.clone()
+    } else {
+        let targets = ffi::resolve_targets(config.targets.clone())?;
+        ffi::build_targets(&workspace_root, &targets, config.release)?;
+
+        workspace_root.join("bindings/ffi/target")
+    };
+
+    let artifacts_dir = base_artifacts_dir.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize FFI artefacts directory at {}",
+            base_artifacts_dir.display()
+        )
+    })?;
+
+    let package_dir = invoke_dotnet_pack(
+        &workspace_root,
+        &artifacts_dir,
+        configuration,
+        &profile,
+        !config.enforce_artifacts,
+        config.clean,
+        config.repository_commit.as_deref(),
+        config.include_symbols,
+    )?;
+
+    let packages = find_packages(&package_dir)?;
+
+    Ok(BuildNugetResult {
+        package_dir,
+        packages,
+    })
+}
+
+/// Returns all NuGet packages currently present in the given directory.
+pub fn find_packages(package_dir: &Path) -> Result<Vec<PathBuf>> {
+    if !package_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut packages = Vec::new();
+    let entries = fs::read_dir(package_dir).with_context(|| {
+        format!(
+            "failed to enumerate NuGet artefacts under {}",
+            package_dir.display()
+        )
+    })?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map_or(false, |ext| ext.eq_ignore_ascii_case("nupkg"))
+        {
+            packages.push(path);
+        }
+    }
+
+    packages.sort();
+    Ok(packages)
+}
+fn invoke_dotnet_pack(
+    root: &Path,
+    artifacts_dir: &Path,
+    configuration: &str,
+    profile: &str,
+    ignore_missing: bool,
+    clean: bool,
+    repository_commit: Option<&str>,
+    include_symbols: bool,
+) -> Result<PathBuf> {
+    let project_dir = root.join("bindings/csharp/Regorus");
+    let artifacts_dir_str = artifacts_dir
+        .to_str()
+        .ok_or_else(|| anyhow!("artefact directory path contains invalid UTF-8"))?;
+
+    let profile_arg = format!("/p:RegorusFFIArtifactsProfile={}", profile);
+    let dir_arg = format!("/p:RegorusFFIArtifactsDir={}", artifacts_dir_str);
+    let repo_commit_arg = repository_commit.map(|sha| format!("/p:RepositoryCommit={}", sha));
+    let symbols_args = if include_symbols {
+        Some(("/p:IncludeSymbols=true", "/p:SymbolPackageFormat=snupkg"))
+    } else {
+        None
+    };
+
+    if clean {
+        clean_msbuild_project(&project_dir)?;
+        let artefact_root = project_dir.join("bin").join(configuration);
+        if artefact_root.exists() {
+            fs::remove_dir_all(&artefact_root).with_context(|| {
+                format!(
+                    "failed to remove existing NuGet artefacts from {}",
+                    artefact_root.display()
+                )
+            })?;
+        }
+    }
+
+    let mut restore = Command::new("dotnet");
+    restore.current_dir(&project_dir);
+    restore.arg("restore");
+    run_command(restore, "dotnet restore")?;
+
+    let mut build = Command::new("dotnet");
+    build.current_dir(&project_dir);
+    build.arg("build");
+    build.arg("--no-restore");
+    build.arg("-c");
+    build.arg(configuration);
+    build.arg("--verbosity");
+    build.arg("minimal");
+    build.arg(&dir_arg);
+    build.arg(&profile_arg);
+    if let Some(arg) = &repo_commit_arg {
+        build.arg(arg);
+    }
+    if ignore_missing {
+        build.arg("/p:IgnoreMissingArtifacts=true");
+    }
+    run_command(build, "dotnet build")?;
+
+    let mut pack = Command::new("dotnet");
+    pack.current_dir(&project_dir);
+    pack.arg("pack");
+    pack.arg("--no-build");
+    pack.arg("-c");
+    pack.arg(configuration);
+    pack.arg(&dir_arg);
+    pack.arg(&profile_arg);
+    if let Some(arg) = &repo_commit_arg {
+        pack.arg(arg);
+    }
+    if let Some((include_symbols_arg, symbols_format_arg)) = symbols_args {
+        pack.arg(include_symbols_arg);
+        pack.arg(symbols_format_arg);
+    }
+    if ignore_missing {
+        pack.arg("/p:IgnoreMissingArtifacts=true");
+    }
+    run_command(pack, "dotnet pack")?;
+
+    Ok(project_dir.join("bin").join(configuration))
+}
+
+impl BuildNugetCommand {
+    /// Entry point executed by the xtask harness.
+    pub fn run(&self) -> Result<()> {
+        let config = self.to_config();
+        let result = build_nuget_package(&config)?;
+
+        println!(
+            "NuGet package(s) available under {}",
+            result.package_dir.display()
+        );
+
+        if result.packages.is_empty() {
+            println!("No NuGet packages were produced; check earlier log output.");
+        } else {
+            print_package_listing(&result.packages)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn to_config(&self) -> BuildNugetConfig {
+        BuildNugetConfig {
+            targets: self.targets.clone(),
+            release: self.release,
+            clean: self.clean,
+            artifacts_dir: self.artifacts_dir.clone(),
+            enforce_artifacts: self.enforce_artifacts,
+            repository_commit: self.repository_commit.clone(),
+            include_symbols: self.include_symbols,
+        }
+    }
+}
+
+fn print_package_listing(packages: &[PathBuf]) -> Result<()> {
+    for package in packages {
+        println!("Contents of {}:", package.display());
+        let file =
+            File::open(package).with_context(|| format!("failed to open {}", package.display()))?;
+        let mut archive = ZipArchive::new(file)
+            .with_context(|| format!("failed to read zip archive from {}", package.display()))?;
+
+        let mut entries = Vec::new();
+        for index in 0..archive.len() {
+            let file = archive.by_index(index).with_context(|| {
+                format!("failed to access entry {index} in {}", package.display())
+            })?;
+            entries.push(file.name().to_string());
+        }
+
+        entries.sort();
+        for entry in entries {
+            println!("  {}", entry);
+        }
+    }
+
+    Ok(())
+}
+
+/// Builds (if required) and tests the C# bindings against the packaged NuGet.
+#[derive(Args, Clone)]
+pub struct TestCsharpCommand {
+    /// Build the Rust FFI artefacts for the provided target triple (defaults to the host).
+    #[arg(long = "target", value_name = "TRIPLE")]
+    pub targets: Vec<String>,
+
+    /// Build and pack using the Release configuration (defaults to Debug).
+    #[arg(long)]
+    pub release: bool,
+
+    /// Remove existing build artefacts before running the command.
+    #[arg(long)]
+    pub clean: bool,
+
+    /// Override the directory that contains compiled regorus FFI artefacts.
+    #[arg(long, value_name = "PATH")]
+    pub artifacts_dir: Option<PathBuf>,
+
+    /// Require all platform artefacts to exist before packing.
+    #[arg(long)]
+    pub enforce_artifacts: bool,
+
+    /// Always rebuild the NuGet package instead of reusing an existing archive.
+    #[arg(long)]
+    pub force_nuget: bool,
+
+    /// Restore and test using Regorus NuGet artefacts located at DIR. Defaults to bindings/csharp/Regorus/bin/<configuration>.
+    #[arg(long = "nuget-dir", value_name = "DIR")]
+    pub nuget_dir: Option<PathBuf>,
+
+    /// Optional dotnet test filter to apply when running Regorus.Tests.
+    #[arg(long = "test-filter", value_name = "FILTER")]
+    pub test_filter: Option<String>,
+
+    /// Skip building/running the C# sample apps (TestApp, TargetExampleApp).
+    #[arg(long = "skip-apps")]
+    pub skip_apps: bool,
+
+    /// Emit console logger output for dotnet test.
+    #[arg(long = "console-logger")]
+    pub console_logger: bool,
+}
+
+impl TestCsharpCommand {
+    pub fn run(&self) -> Result<()> {
+        let workspace = workspace_root();
+        let configuration = if self.release { "Release" } else { "Debug" };
+        if self.nuget_dir.is_some() && self.force_nuget {
+            return Err(anyhow!(
+                "--force-nuget cannot be combined with --nuget-dir; build outputs always land in the default directory"
+            ));
+        }
+
+        let mut package_dir = if let Some(dir) = &self.nuget_dir {
+            let path = PathBuf::from(dir);
+            if path.is_absolute() {
+                path
+            } else {
+                workspace.join(path)
+            }
+        } else {
+            workspace
+                .join("bindings/csharp/Regorus/bin")
+                .join(configuration)
+        };
+
+        let build_config = BuildNugetConfig {
+            targets: self.targets.clone(),
+            release: self.release,
+            clean: self.clean,
+            artifacts_dir: self.artifacts_dir.clone(),
+            enforce_artifacts: self.enforce_artifacts,
+            repository_commit: None,
+            include_symbols: false,
+        };
+
+        let mut packages = find_packages(&package_dir)?;
+        if self.force_nuget || (packages.is_empty() && self.nuget_dir.is_none()) {
+            println!(
+                "{} NuGet package(s); invoking build...",
+                if self.force_nuget {
+                    "Forcing rebuild of"
+                } else {
+                    "Missing"
+                }
+            );
+            let build = build_nuget_package(&build_config)?;
+            package_dir = build.package_dir;
+            packages = build.packages;
+        } else {
+            println!(
+                "Reusing existing NuGet package(s) under {}.",
+                package_dir.display()
+            );
+        }
+
+        if packages.is_empty() {
+            return Err(anyhow!(
+                "No NuGet packages are available under {}; supply --nuget-dir with a populated directory or omit it to let xtask build the package",
+                package_dir.display()
+            ));
+        }
+
+        println!("Using NuGet package(s):");
+        for package in &packages {
+            println!("  {}", package.display());
+        }
+
+        let package_cache = workspace.join("bindings/csharp/.nuget/packages");
+        fs::create_dir_all(&package_cache).with_context(|| {
+            format!(
+                "failed to create NuGet cache directory at {}",
+                package_cache.display()
+            )
+        })?;
+
+        let mut package_versions = HashSet::new();
+        for package in &packages {
+            if let Some(version) = package
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.strip_prefix("Microsoft.Regorus."))
+            {
+                package_versions.insert(version.to_owned());
+            }
+        }
+
+        for version in &package_versions {
+            let cache_entry = package_cache.join("microsoft.regorus").join(version);
+            if cache_entry.exists() {
+                fs::remove_dir_all(&cache_entry).with_context(|| {
+                    format!(
+                        "failed to remove cached package at {}",
+                        cache_entry.display()
+                    )
+                })?;
+            }
+        }
+
+        run_regorus_tests(
+            &workspace,
+            configuration,
+            &package_dir,
+            self.clean,
+            &package_cache,
+            self.test_filter.as_deref(),
+            self.skip_apps,
+            self.console_logger,
+        )?;
+
+        Ok(())
+    }
+}
+
+fn run_regorus_tests(
+    workspace: &Path,
+    configuration: &str,
+    package_dir: &Path,
+    clean: bool,
+    package_cache: &Path,
+    test_filter: Option<&str>,
+    skip_apps: bool,
+    console_logger: bool,
+) -> Result<()> {
+    // Copy .nupkg files into the local-packages directory declared in nuget.config
+    // so that Microsoft.Regorus resolves from the mapped "local" source.
+    let local_packages = workspace.join("bindings/csharp/local-packages");
+    if local_packages.exists() {
+        fs::remove_dir_all(&local_packages).with_context(|| {
+            format!(
+                "failed to clean local-packages directory at {}",
+                local_packages.display()
+            )
+        })?;
+    }
+    fs::create_dir_all(&local_packages).with_context(|| {
+        format!(
+            "failed to create local-packages directory at {}",
+            local_packages.display()
+        )
+    })?;
+
+    let nuget_config = workspace.join("bindings/csharp/nuget.config");
+
+    // Verify that package source mapping blocks Microsoft.Regorus from resolving
+    // via nuget.org. With local-packages empty, restore must fail with NU1101.
+    println!("Verifying package source mapping blocks external resolution...");
+    {
+        let verify_cache = package_cache.join("_verify");
+        let _ = fs::remove_dir_all(&verify_cache);
+        fs::create_dir_all(&verify_cache)?;
+        let verify_cache_str = verify_cache
+            .to_str()
+            .ok_or_else(|| anyhow!("verify cache path contains invalid UTF-8"))?;
+
+        let regorus_tests = workspace.join("bindings/csharp/Regorus.Tests");
+        let mut verify = Command::new("dotnet");
+        verify.current_dir(&regorus_tests);
+        verify.arg("restore");
+        verify.arg("--configfile");
+        verify.arg(&nuget_config);
+        verify.arg("--arch");
+        verify.arg(dotnet_host_arch());
+        verify.arg(format!("/p:RestorePackagesPath={}", verify_cache_str));
+        verify.arg("/p:UsePackageReference=true");
+        verify.env("NUGET_PACKAGES", &verify_cache);
+
+        let output = verify
+            .output()
+            .context("failed to run dotnet restore for source mapping verification")?;
+        let _ = fs::remove_dir_all(&verify_cache);
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{stdout}\n{stderr}");
+
+        if output.status.success() {
+            return Err(anyhow!(
+                "Source mapping verification failed: dotnet restore succeeded when it should \
+                 have failed. Microsoft.Regorus must not be resolvable from nuget.org. \
+                 Check that bindings/csharp/nuget.config has correct packageSourceMapping."
+            ));
+        }
+
+        // Ensure the failure is specifically NU1101 for Microsoft.Regorus, not an
+        // unrelated error (e.g. network outage).
+        if !combined.contains("NU1101") || !combined.contains("Microsoft.Regorus") {
+            return Err(anyhow!(
+                "Source mapping verification failed: dotnet restore failed, but not for the \
+                 expected reason. Expected NU1101 for Microsoft.Regorus to confirm external \
+                 resolution is blocked.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            ));
+        }
+
+        println!("Verified: Microsoft.Regorus is not resolvable from external sources.");
+    }
+
+    for entry in fs::read_dir(package_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map_or(false, |ext| ext.eq_ignore_ascii_case("nupkg"))
+        {
+            let dest = local_packages.join(entry.file_name());
+            fs::copy(&path, &dest).with_context(|| {
+                format!("failed to copy {} to {}", path.display(), dest.display())
+            })?;
+            println!(
+                "Copied {} to local-packages/",
+                entry.file_name().to_string_lossy()
+            );
+        }
+    }
+
+    let cache_path = package_cache
+        .to_str()
+        .ok_or_else(|| anyhow!("NuGet cache path contains invalid UTF-8"))?;
+    let properties = vec![
+        format!("/p:RestorePackagesPath={}", cache_path),
+        "/p:UsePackageReference=true".to_string(),
+    ];
+    let property_args: Vec<&str> = properties.iter().map(|value| value.as_str()).collect();
+
+    let regorus_tests = workspace.join("bindings/csharp/Regorus.Tests");
+    if clean {
+        clean_msbuild_project(&regorus_tests)?;
+    }
+    println!("Running Regorus.Tests (includes RVM program tests)...");
+    restore_with_source(
+        &regorus_tests,
+        &property_args,
+        "Regorus.Tests",
+        package_cache,
+        &nuget_config,
+    )?;
+
+    let mut test = Command::new("dotnet");
+    test.current_dir(&regorus_tests);
+    test.arg("test");
+    test.arg("--no-restore");
+    test.arg("-c");
+    test.arg(configuration);
+    test.arg("--arch");
+    test.arg(dotnet_host_arch());
+    for p in &property_args {
+        test.arg(p);
+    }
+    if console_logger {
+        test.arg("--logger");
+        test.arg("console;verbosity=detailed");
+    }
+    if let Some(filter) = test_filter {
+        test.arg("--");
+        test.arg("--filter");
+        test.arg(filter);
+    }
+    test.env("NUGET_PACKAGES", package_cache);
+    run_command(test, "dotnet test (Regorus.Tests)")?;
+
+    if skip_apps {
+        return Ok(());
+    }
+
+    let test_app = workspace.join("bindings/csharp/TestApp");
+    if clean {
+        clean_msbuild_project(&test_app)?;
+    }
+    restore_with_source(
+        &test_app,
+        &property_args,
+        "TestApp",
+        package_cache,
+        &nuget_config,
+    )?;
+    let mut build = Command::new("dotnet");
+    build.current_dir(&test_app);
+    build.arg("build");
+    build.arg("--no-restore");
+    build.arg("-c");
+    build.arg(configuration);
+    build.arg("--arch");
+    build.arg(dotnet_host_arch());
+    for p in &property_args {
+        build.arg(p);
+    }
+    build.env("NUGET_PACKAGES", package_cache);
+    run_command(build, "dotnet build (TestApp)")?;
+
+    let mut run = Command::new("dotnet");
+    run.current_dir(&test_app);
+    run.arg("run");
+    run.arg("--no-build");
+    run.arg("--framework");
+    run.arg("net8.0");
+    run.arg("-c");
+    run.arg(configuration);
+    run.arg("--arch");
+    run.arg(dotnet_host_arch());
+    for p in &property_args {
+        run.arg(p);
+    }
+    run.env("NUGET_PACKAGES", package_cache);
+    run_command(run, "dotnet run (TestApp)")?;
+
+    let target_example = workspace.join("bindings/csharp/TargetExampleApp");
+    if clean {
+        clean_msbuild_project(&target_example)?;
+    }
+    restore_with_source(
+        &target_example,
+        &property_args,
+        "TargetExampleApp",
+        package_cache,
+        &nuget_config,
+    )?;
+    let mut build_example = Command::new("dotnet");
+    build_example.current_dir(&target_example);
+    build_example.arg("build");
+    build_example.arg("--no-restore");
+    build_example.arg("-c");
+    build_example.arg(configuration);
+    build_example.arg("--arch");
+    build_example.arg(dotnet_host_arch());
+    for p in &property_args {
+        build_example.arg(p);
+    }
+    build_example.env("NUGET_PACKAGES", package_cache);
+    run_command(build_example, "dotnet build (TargetExampleApp)")?;
+
+    let mut run_example = Command::new("dotnet");
+    run_example.current_dir(&target_example);
+    run_example.arg("run");
+    run_example.arg("--no-build");
+    run_example.arg("--framework");
+    run_example.arg("net8.0");
+    run_example.arg("-c");
+    run_example.arg(configuration);
+    run_example.arg("--arch");
+    run_example.arg(dotnet_host_arch());
+    for p in &property_args {
+        run_example.arg(p);
+    }
+    run_example.env("NUGET_PACKAGES", package_cache);
+    run_command(run_example, "dotnet run (TargetExampleApp)")?;
+
+    Ok(())
+}
+
+fn restore_with_source(
+    project_dir: &Path,
+    properties: &[&str],
+    label: &str,
+    package_cache: &Path,
+    nuget_config: &Path,
+) -> Result<()> {
+    let mut restore = Command::new("dotnet");
+    restore.current_dir(project_dir);
+    restore.arg("restore");
+    restore.arg("--configfile");
+    restore.arg(nuget_config);
+    restore.arg("--arch");
+    restore.arg(dotnet_host_arch());
+    for property in properties {
+        restore.arg(property);
+    }
+    restore.env("NUGET_PACKAGES", package_cache);
+    run_command(restore, &format!("dotnet restore ({label})"))
+}
+
+fn clean_msbuild_project(project_dir: &Path) -> Result<()> {
+    if !project_dir.exists() {
+        return Ok(());
+    }
+
+    let bin_dir = project_dir.join("bin");
+    if bin_dir.exists() {
+        fs::remove_dir_all(&bin_dir).with_context(|| {
+            format!(
+                "failed to remove bin directory at {} while cleaning",
+                bin_dir.display()
+            )
+        })?;
+    }
+
+    let obj_dir = project_dir.join("obj");
+    if obj_dir.exists() {
+        fs::remove_dir_all(&obj_dir).with_context(|| {
+            format!(
+                "failed to remove obj directory at {} while cleaning",
+                obj_dir.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}

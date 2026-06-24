@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <RegorusPackageVersion>0.10.1</RegorusPackageVersion>
+    <RegorusPackageVersionSuffix Condition="'$(VersionSuffix)' != ''">-$(VersionSuffix)</RegorusPackageVersionSuffix>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Centralize Regorus package version with optional CI suffix -->
+    <PackageVersion Include="Microsoft.Regorus" Version="$(RegorusPackageVersion)$(RegorusPackageVersionSuffix)" />
+    <PackageVersion Include="MSTest" Version="3.8.2" />
+    <PackageVersion Include="System.Text.Json" Version="8.0.5" />
+    <PackageVersion Include="YamlDotNet" Version="13.7.0" />
+  </ItemGroup>
+</Project>

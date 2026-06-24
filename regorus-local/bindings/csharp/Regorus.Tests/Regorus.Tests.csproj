@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Nullable>Enable</Nullable>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableMSTestRunner>true</EnableMSTestRunner>
+    <!-- More info about dotnet test integration https://learn.microsoft.com/dotnet/core/testing/unit-testing-platform-integration-dotnet-test -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <TestingPlatformShowTestsFailure>true</TestingPlatformShowTestsFailure>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  
+  <PropertyGroup>
+    <UsePackageReference Condition="'$(UsePackageReference)' == ''">false</UsePackageReference>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../../tests/**/*.*" Link="tests/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MSTest" />
+    <PackageReference Include="YamlDotNet" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UsePackageReference)' != 'true'">
+    <ProjectReference Include="../Regorus/Regorus.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UsePackageReference)' == 'true'">
+    <PackageReference Include="Microsoft.Regorus" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../../src/languages/azure_rbac/test_cases/*.yaml" Link="test_cases/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

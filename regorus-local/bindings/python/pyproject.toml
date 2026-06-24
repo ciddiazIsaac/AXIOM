@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "regorus"
+requires-python = ">=3.8"
+license = { text = "MIT AND Apache-2.0 AND BSD-3-Clause" }
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: BSD License",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+
+[tool.maturin]
+binding = ["cffi"]
+# See https://github.com/mayeut/pep600_compliance?tab=readme-ov-file#distro-compatibility
+# GLIBC releases: https://www.sourceware.org/glibc/wiki/Glibc%20Timeline
+compatibility = "manylinux_2_34"
+features = ["pyo3/extension-module"]

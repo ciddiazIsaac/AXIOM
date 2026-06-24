@@ -1,0 +1,542 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+#![allow(non_snake_case)]
+
+use core::num::{NonZeroU32, NonZeroUsize};
+use regorus::languages::rego::compiler::Compiler;
+use regorus::rvm::program::{
+    generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig,
+    DeserializationResult, Program as RvmProgram,
+};
+use regorus::rvm::vm::{ExecutionMode, RegoVM};
+use regorus::{compile_policy_with_entrypoint, PolicyModule, Rc, Value};
+use serde::Deserialize;
+use std::sync::Arc;
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+/// WASM wrapper for [`regorus::Engine`]
+pub struct Engine {
+    engine: regorus::Engine,
+}
+
+#[derive(Deserialize)]
+struct ModuleSpec {
+    id: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PolicyLengthSpec {
+    max_col: u32,
+    max_file_bytes: usize,
+    max_lines: usize,
+}
+
+#[cfg(feature = "cache")]
+#[derive(Deserialize)]
+struct CacheConfigSpec {
+    regex: usize,
+    glob: usize,
+}
+
+/// Configure the global pattern caches used by regex and glob builtins.
+///
+/// Accepts a JS object: `{ regex, glob }`.
+#[cfg(feature = "cache")]
+#[wasm_bindgen(js_name = "setCacheConfig")]
+pub fn set_cache_config(config: JsValue) -> Result<(), JsValue> {
+    let spec: CacheConfigSpec = serde_wasm_bindgen::from_value(config).map_err(error_to_jsvalue)?;
+    regorus::cache::configure(regorus::cache::Config {
+        regex: spec.regex,
+        glob: spec.glob,
+    });
+    Ok(())
+}
+
+/// Clear all entries from every pattern cache.
+#[cfg(feature = "cache")]
+#[wasm_bindgen(js_name = "clearCache")]
+pub fn clear_cache() {
+    regorus::cache::clear();
+}
+
+#[wasm_bindgen]
+pub struct Program {
+    program: Arc<RvmProgram>,
+}
+
+#[wasm_bindgen]
+pub struct ProgramDeserializationResult {
+    program: Arc<RvmProgram>,
+    is_partial: bool,
+}
+
+#[wasm_bindgen]
+impl ProgramDeserializationResult {
+    /// Whether the program was partially deserialized.
+    #[wasm_bindgen(getter)]
+    pub fn isPartial(&self) -> bool {
+        self.is_partial
+    }
+
+    /// Get the deserialized program.
+    pub fn program(&self) -> Program {
+        Program {
+            program: self.program.clone(),
+        }
+    }
+}
+
+#[wasm_bindgen]
+pub struct Rvm {
+    vm: RegoVM,
+}
+
+fn error_to_jsvalue<E: std::fmt::Display>(e: E) -> JsValue {
+    JsValue::from_str(&format!("{e}"))
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for Engine {
+    /// Clone a [`Engine`]
+    ///
+    /// To avoid having to parse same policy again, the engine can be cloned
+    /// after policies and data have been added.
+    fn clone(&self) -> Self {
+        Self {
+            engine: self.engine.clone(),
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl Engine {
+    #[wasm_bindgen(constructor)]
+    /// Construct a new Engine
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html
+    pub fn new() -> Self {
+        Self {
+            engine: regorus::Engine::new(),
+        }
+    }
+
+    /// Turn on rego v0.
+    ///
+    /// Regorus defaults to rego v1.
+    ///
+    /// * `enable`: Whether to enable or disable rego v0.
+    pub fn setRegoV0(&mut self, enable: bool) {
+        self.engine.set_rego_v0(enable)
+    }
+
+    /// Add a policy
+    ///
+    /// The policy is parsed into AST.
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.add_policy
+    ///
+    /// * `path`: A filename to be associated with the policy.
+    /// * `rego`: Rego policy.
+    pub fn addPolicy(&mut self, path: String, rego: String) -> Result<String, JsValue> {
+        self.engine.add_policy(path, rego).map_err(error_to_jsvalue)
+    }
+
+    /// Add policy data.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.add_data
+    /// * `data`: JSON encoded value to be used as policy data.
+    pub fn addDataJson(&mut self, data: String) -> Result<(), JsValue> {
+        let data = regorus::Value::from_json_str(&data).map_err(error_to_jsvalue)?;
+        self.engine.add_data(data).map_err(error_to_jsvalue)
+    }
+
+    /// Get the list of packages defined by loaded policies.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.get_packages
+    pub fn getPackages(&self) -> Result<Vec<String>, JsValue> {
+        self.engine.get_packages().map_err(error_to_jsvalue)
+    }
+
+    /// Get the list of policies.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.get_policies
+    pub fn getPolicies(&self) -> Result<String, JsValue> {
+        self.engine.get_policies_as_json().map_err(error_to_jsvalue)
+    }
+
+    /// Clear policy data.
+    ///
+    /// See https://docs.rs/regorus/0.1.0-alpha.2/regorus/struct.Engine.html#method.clear_data
+    pub fn clearData(&mut self) -> Result<(), JsValue> {
+        self.engine.clear_data();
+        Ok(())
+    }
+
+    /// Set input.
+    ///
+    /// See https://docs.rs/regorus/0.1.0-alpha.2/regorus/struct.Engine.html#method.set_input
+    /// * `input`: JSON encoded value to be used as input to query.
+    pub fn setInputJson(&mut self, input: String) -> Result<(), JsValue> {
+        let input = regorus::Value::from_json_str(&input).map_err(error_to_jsvalue)?;
+        self.engine.set_input(input);
+        Ok(())
+    }
+
+    /// Evaluate query.
+    ///
+    /// See https://docs.rs/regorus/0.1.0-alpha.2/regorus/struct.Engine.html#method.eval_query
+    /// * `query`: Rego expression to be evaluate.
+    pub fn evalQuery(&mut self, query: String) -> Result<String, JsValue> {
+        let results = self
+            .engine
+            .eval_query(query, false)
+            .map_err(error_to_jsvalue)?;
+        serde_json::to_string_pretty(&results).map_err(error_to_jsvalue)
+    }
+
+    /// Evaluate rule(s) at given path.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.eval_rule
+    ///
+    /// * `path`: The full path to the rule(s).
+    pub fn evalRule(&mut self, path: String) -> Result<String, JsValue> {
+        let v = self.engine.eval_rule(path).map_err(error_to_jsvalue)?;
+        v.to_json_str().map_err(error_to_jsvalue)
+    }
+
+    /// Gather output from print statements instead of emiting to stderr.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.set_gather_prints
+    /// * `b`: Whether to enable gathering prints or not.
+    pub fn setGatherPrints(&mut self, b: bool) {
+        self.engine.set_gather_prints(b)
+    }
+
+    /// Set the policy length limits used when loading policies.
+    ///
+    /// Accepts a JS object: `{ maxCol, maxFileBytes, maxLines }`.
+    pub fn setPolicyLengthConfig(&mut self, config: JsValue) -> Result<(), JsValue> {
+        let spec: PolicyLengthSpec =
+            serde_wasm_bindgen::from_value(config).map_err(error_to_jsvalue)?;
+        self.engine
+            .set_policy_length_config(regorus::PolicyLengthConfig {
+                max_col: NonZeroU32::new(spec.max_col)
+                    .ok_or_else(|| JsValue::from_str("maxCol must be non-zero"))?,
+                max_file_bytes: NonZeroUsize::new(spec.max_file_bytes)
+                    .ok_or_else(|| JsValue::from_str("maxFileBytes must be non-zero"))?,
+                max_lines: NonZeroUsize::new(spec.max_lines)
+                    .ok_or_else(|| JsValue::from_str("maxLines must be non-zero"))?,
+            });
+        Ok(())
+    }
+
+    /// Clear the policy length configuration, reverting to defaults.
+    pub fn clearPolicyLengthConfig(&mut self) {
+        self.engine.clear_policy_length_config();
+    }
+
+    /// Take the gathered output of print statements.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.take_prints
+    pub fn takePrints(&mut self) -> Result<Vec<String>, JsValue> {
+        self.engine.take_prints().map_err(error_to_jsvalue)
+    }
+
+    /// Enable/disable policy coverage.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.set_enable_coverage
+    /// * `b`: Whether to enable gathering coverage or not.
+    #[cfg(feature = "coverage")]
+    pub fn setEnableCoverage(&mut self, enable: bool) {
+        self.engine.set_enable_coverage(enable)
+    }
+
+    /// Get the coverage report as json.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.get_coverage_report
+    #[cfg(feature = "coverage")]
+    pub fn getCoverageReport(&self) -> Result<String, JsValue> {
+        let report = self
+            .engine
+            .get_coverage_report()
+            .map_err(error_to_jsvalue)?;
+        serde_json::to_string_pretty(&report).map_err(error_to_jsvalue)
+    }
+
+    /// Clear gathered coverage data.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.clear_coverage_data
+    #[cfg(feature = "coverage")]
+    pub fn clearCoverageData(&mut self) {
+        self.engine.clear_coverage_data()
+    }
+
+    /// Get ANSI color coded coverage report.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/coverage/struct.Report.html#method.to_string_pretty
+    #[cfg(feature = "coverage")]
+    pub fn getCoverageReportPretty(&self) -> Result<String, JsValue> {
+        let report = self
+            .engine
+            .get_coverage_report()
+            .map_err(error_to_jsvalue)?;
+        report.to_string_pretty().map_err(error_to_jsvalue)
+    }
+
+    /// Get AST of policies.
+    ///
+    /// See https://docs.rs/regorus/latest/regorus/struct.Engine.html#method.get_ast_as_json
+    #[cfg(feature = "ast")]
+    pub fn getAstAsJson(&self) -> Result<String, JsValue> {
+        self.engine.get_ast_as_json().map_err(error_to_jsvalue)
+    }
+}
+
+#[wasm_bindgen]
+impl Program {
+    /// Compile an RVM program from modules and entry points.
+    pub fn compileFromModules(
+        data_json: String,
+        modules_json: String,
+        entry_points_json: String,
+    ) -> Result<Program, JsValue> {
+        let data = Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
+        let modules: Vec<ModuleSpec> =
+            serde_json::from_str(&modules_json).map_err(error_to_jsvalue)?;
+        let entry_points: Vec<String> =
+            serde_json::from_str(&entry_points_json).map_err(error_to_jsvalue)?;
+        if entry_points.is_empty() {
+            return Err(error_to_jsvalue(
+                "entry_points must contain at least one entry",
+            ));
+        }
+
+        let policy_modules: Vec<PolicyModule> = modules
+            .into_iter()
+            .map(|module| PolicyModule {
+                id: Rc::from(module.id.as_str()),
+                content: Rc::from(module.content.as_str()),
+            })
+            .collect();
+
+        let entry_points_ref: Vec<&str> = entry_points.iter().map(|s| s.as_str()).collect();
+        let compiled =
+            compile_policy_with_entrypoint(data, &policy_modules, Rc::from(entry_points_ref[0]))
+                .map_err(error_to_jsvalue)?;
+        let program = Compiler::compile_from_policy(&compiled, &entry_points_ref)
+            .map_err(error_to_jsvalue)?;
+        Ok(Program { program })
+    }
+
+    /// Serialize a program to binary format.
+    pub fn serializeBinary(&self) -> Result<Vec<u8>, JsValue> {
+        self.program
+            .serialize_binary()
+            .map_err(|e| error_to_jsvalue(e.to_string()))
+    }
+
+    /// Deserialize an RVM program from binary format.
+    pub fn deserializeBinary(data: Vec<u8>) -> Result<ProgramDeserializationResult, JsValue> {
+        let (program, is_partial) =
+            match RvmProgram::deserialize_binary(&data).map_err(error_to_jsvalue)? {
+                DeserializationResult::Complete(program) => (program, false),
+                DeserializationResult::Partial(program) => (program, true),
+            };
+        Ok(ProgramDeserializationResult {
+            program: Arc::new(program),
+            is_partial,
+        })
+    }
+
+    /// Generate a readable assembly listing.
+    pub fn generateListing(&self) -> Result<String, JsValue> {
+        Ok(generate_assembly_listing(
+            self.program.as_ref(),
+            &AssemblyListingConfig::default(),
+        ))
+    }
+
+    /// Generate a tabular assembly listing.
+    pub fn generateTabularListing(&self) -> Result<String, JsValue> {
+        Ok(generate_tabular_assembly_listing(
+            self.program.as_ref(),
+            &AssemblyListingConfig::default(),
+        ))
+    }
+}
+
+#[wasm_bindgen]
+impl Rvm {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self { vm: RegoVM::new() }
+    }
+
+    /// Load a program into the VM.
+    pub fn loadProgram(&mut self, program: &Program) {
+        self.vm.load_program(program.program.clone());
+    }
+
+    /// Set VM data from JSON.
+    pub fn setDataJson(&mut self, data_json: String) -> Result<(), JsValue> {
+        let data = Value::from_json_str(&data_json).map_err(error_to_jsvalue)?;
+        self.vm.set_data(data).map_err(error_to_jsvalue)
+    }
+
+    /// Set VM input from JSON.
+    pub fn setInputJson(&mut self, input_json: String) -> Result<(), JsValue> {
+        let input = Value::from_json_str(&input_json).map_err(error_to_jsvalue)?;
+        self.vm.set_input(input);
+        Ok(())
+    }
+
+    /// Set execution mode (0 = run-to-completion, 1 = suspendable).
+    pub fn setExecutionMode(&mut self, mode: u8) -> Result<(), JsValue> {
+        let mode = match mode {
+            0 => ExecutionMode::RunToCompletion,
+            1 => ExecutionMode::Suspendable,
+            _ => return Err(error_to_jsvalue("invalid execution mode")),
+        };
+        self.vm.set_execution_mode(mode);
+        Ok(())
+    }
+
+    /// Execute the program and return the JSON result.
+    pub fn execute(&mut self) -> Result<String, JsValue> {
+        let value = self.vm.execute().map_err(error_to_jsvalue)?;
+        value.to_json_str().map_err(error_to_jsvalue)
+    }
+
+    /// Execute an entry point by name and return the JSON result.
+    pub fn executeEntryPoint(&mut self, entry_point: String) -> Result<String, JsValue> {
+        let value = self
+            .vm
+            .execute_entry_point_by_name(&entry_point)
+            .map_err(error_to_jsvalue)?;
+        value.to_json_str().map_err(error_to_jsvalue)
+    }
+
+    /// Resume execution with an optional JSON value.
+    pub fn resume(&mut self, resume_json: Option<String>) -> Result<String, JsValue> {
+        let value = if let Some(json) = resume_json {
+            Some(Value::from_json_str(&json).map_err(error_to_jsvalue)?)
+        } else {
+            None
+        };
+        let result = self.vm.resume(value).map_err(error_to_jsvalue)?;
+        result.to_json_str().map_err(error_to_jsvalue)
+    }
+
+    /// Get the execution state as a string.
+    pub fn getExecutionState(&self) -> String {
+        format!("{:?}", self.vm.execution_state())
+    }
+}
+
+impl Default for Rvm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error_to_jsvalue;
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    #[allow(dead_code)]
+    pub fn basic() -> Result<(), JsValue> {
+        let mut engine = crate::Engine::new();
+        engine.setEnableCoverage(true);
+
+        // Exercise all APIs.
+        engine.addDataJson(
+            r#"
+        {
+           "foo" : "bar"
+        }
+        "#
+            .to_string(),
+        )?;
+
+        engine.setInputJson(
+            r#"
+        {
+           "message" : "Hello"
+        }
+        "#
+            .to_string(),
+        )?;
+
+        let pkg = engine.addPolicy(
+            "hello.rego".to_string(),
+            r#"
+            package test
+            message = input.message"#
+                .to_string(),
+        )?;
+        assert_eq!(pkg, "data.test");
+
+        let results = engine.evalQuery("data".to_string())?;
+        let r = regorus::Value::from_json_str(&results).map_err(error_to_jsvalue)?;
+
+        let v = &r["result"][0]["expressions"][0]["value"];
+
+        // Ensure that input and policy were evaluated.
+        assert_eq!(v["test"]["message"], regorus::Value::from("Hello"));
+
+        // Test that data was set.
+        assert_eq!(v["foo"], regorus::Value::from("bar"));
+
+        // Use eval_rule to perform same query.
+        let v = engine.evalRule("data.test.message".to_owned())?;
+        let v = regorus::Value::from_json_str(&v).map_err(error_to_jsvalue)?;
+
+        // Ensure that input and policy were evaluated.
+        assert_eq!(v, regorus::Value::from("Hello"));
+
+        let pkgs = engine.getPackages()?;
+        assert_eq!(pkgs, vec!["data.test"]);
+
+        engine.setGatherPrints(true);
+        let _ = engine.evalQuery("print(\"Hello\")".to_owned());
+        let prints = engine.takePrints()?;
+        assert_eq!(prints, vec!["<query.rego>:1: Hello"]);
+
+        // Test clone.
+        let mut engine1 = engine.clone();
+
+        // Test code coverage.
+        let report = engine1.getCoverageReport()?;
+        let r = regorus::Value::from_json_str(&report).map_err(error_to_jsvalue)?;
+
+        assert_eq!(
+            r["files"][0]["covered"]
+                .as_array()
+                .map_err(crate::error_to_jsvalue)?,
+            &vec![regorus::Value::from(3)]
+        );
+
+        println!("{}", engine1.getCoverageReportPretty()?);
+
+        engine1.clearCoverageData();
+
+        let policies = engine1.getPolicies()?;
+        let v = regorus::Value::from_json_str(&policies).map_err(error_to_jsvalue)?;
+        assert_eq!(
+            v[0]["path"].as_string().map_err(error_to_jsvalue)?.as_ref(),
+            "hello.rego"
+        );
+        Ok(())
+    }
+}

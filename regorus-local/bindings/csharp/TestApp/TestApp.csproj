@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk"> 
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0</TargetFrameworks>
+    <RootNamespace>TestApp</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>10.0</LangVersion>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <UsePackageReference Condition="'$(UsePackageReference)' == ''">false</UsePackageReference>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(UsePackageReference)' != 'true'">
+    <ProjectReference Include="../Regorus/Regorus.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UsePackageReference)' == 'true'">
+    <PackageReference Include="Microsoft.Regorus" />
+  </ItemGroup>
+</Project>

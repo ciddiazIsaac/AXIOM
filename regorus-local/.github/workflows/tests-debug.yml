@@ -1,0 +1,33 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+#
+name: tests/debug
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    # Run at 8:00 AM every day
+    - cron: "0 8 * * *"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - name: Setup Rust toolchain
+      uses: ./.github/actions/toolchains/rust
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      with:
+        shared-key: ${{ runner.os }}-regorus
+    - name: Fetch dependencies
+      run: cargo fetch --locked
+    - name: Run debug CI suite
+      run: cargo xtask ci-debug --frozen
