@@ -36,7 +36,7 @@ impl ValidatorBehaviour {
 
         // 4. Setup Kademlia DHT (Internet discovery)
         let store = kad::store::MemoryStore::new(local_peer_id);
-        let kad = kad::Behaviour::with_config(local_peer_id, store, kad::Config::default());
+        let kad = kad::Behaviour::with_config(local_peer_id, store, kad::Config::new(kad::PROTOCOL_NAME));
 
         // 5. Setup Gossipsub (Message broadcast)
         // We use the hash of the message as the message ID.
