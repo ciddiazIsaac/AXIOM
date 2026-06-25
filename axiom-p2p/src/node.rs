@@ -1,5 +1,5 @@
 use libp2p::{
-    identify, kad, mdns, noise, tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
+    gossipsub, identify, kad, mdns, noise, tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
     identity::Keypair, swarm::SwarmEvent,
 };
 use futures::StreamExt;
@@ -9,6 +9,8 @@ use tokio::time;
 use tokio::select;
 
 use crate::behaviour::{ValidatorBehaviour, ValidatorBehaviourEvent};
+use crate::crdt::RevocationCrdt;
+use crate::message::RevocationMessage;
 
 pub struct NodeConfig {
     pub local_key: Keypair,
@@ -19,6 +21,7 @@ pub struct NodeConfig {
 pub struct ValidatorNode {
     swarm: Swarm<ValidatorBehaviour>,
     bootstrap_nodes: Vec<(PeerId, Multiaddr)>,
+    crdt: RevocationCrdt,
 }
 
 impl ValidatorNode {
@@ -37,6 +40,7 @@ impl ValidatorNode {
         let mut node = Self {
             swarm,
             bootstrap_nodes: config.bootstrap_nodes,
+            crdt: RevocationCrdt::new(),
         };
 
         // Escuchar en la dirección configurada
@@ -117,11 +121,40 @@ impl ValidatorNode {
                             }
                         }
                         
+                        // Eventos Gossipsub (Propagación de Revocaciones)
+                        SwarmEvent::Behaviour(ValidatorBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
+                            if let Ok(revocation) = serde_json::from_slice::<RevocationMessage>(&message.data) {
+                                println!("[Validator] Revocación recibida por Gossipsub: {:?}", revocation);
+                                // Aplicar a nuestro estado local de CRDT
+                                if self.crdt.add(revocation.clone()) {
+                                    println!("[Validator] Credencial {} revocada localmente en CRDT.", revocation.credential_id);
+                                } else {
+                                    println!("[Validator] La revocación ya existía en nuestro CRDT.");
+                                }
+                            } else {
+                                println!("[Validator] No se pudo deserializar el mensaje de Gossipsub.");
+                            }
+                        }
+                        
                         _ => {}
                     }
                 }
             }
         }
+    }
+
+    pub fn publish_revocation(&mut self, revocation: RevocationMessage) -> Result<(), Box<dyn Error>> {
+        let topic = gossipsub::IdentTopic::new("axiom/revocations/1.0.0");
+        let data = serde_json::to_vec(&revocation)?;
+        
+        // Lo publicamos en la red de Gossipsub
+        self.swarm.behaviour_mut().gossipsub.publish(topic, data)?;
+        
+        // También lo añadimos a nuestro propio CRDT localmente
+        self.crdt.add(revocation);
+        
+        println!("[Validator] Revocación publicada en Gossipsub.");
+        Ok(())
     }
 
     fn attempt_bootstrap(&mut self) {
