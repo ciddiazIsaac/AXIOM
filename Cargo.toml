@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "axiom-core", "pdp-server",
+    "axiom-core", "pdp-server", "axiom-p2p"
 ]
 exclude = [
     "regorus-local",

@@ -1,0 +1,9 @@
+[package]
+name = "axiom-p2p"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axiom-core = { path = "../axiom-core" }
+libp2p = { version = "0.54", features = ["tokio", "tcp", "noise", "yamux", "ed25519", "mdns", "kad", "identify", "gossipsub", "macros"] }
+tokio = { version = "1.0", features = ["full"] }
