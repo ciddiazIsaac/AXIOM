@@ -19,9 +19,10 @@ async fn main() {
         
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     
-    // Iniciar el Spooler en segundo plano
+    // Iniciar el Spooler en segundo plano con Redis como broker
     let log_path = std::path::PathBuf::from("./logs/audit.ndjson");
-    AuditSpooler::spawn(rx, log_path);
+    let redis_url = "redis://127.0.0.1:6379/".to_string();
+    AuditSpooler::spawn(rx, redis_url, log_path);
 
     let engine = ZeroTrustEngine::new(&policy)
         .expect("Failed to initialize PDP Engine")

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use tokio::fs::{OpenOptions, create_dir_all};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::UnboundedReceiver;
+use redis::AsyncCommands;
 
 /// Decisión final del PDP para propósitos de auditoría
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,36 +53,69 @@ pub struct AuditSpooler;
 
 impl AuditSpooler {
     /// Inicia el worker en segundo plano.
-    /// Toma el receptor del canal asíncrono y la ruta base del archivo.
-    pub fn spawn(mut receiver: UnboundedReceiver<AuditEvent>, log_path: PathBuf) {
+    /// Toma el receptor del canal asíncrono, la URL de Redis y la ruta base del archivo.
+    pub fn spawn(mut receiver: UnboundedReceiver<AuditEvent>, redis_url: String, log_path: PathBuf) {
         tokio::spawn(async move {
-            // Asegurarse de que el directorio padre exista
+            // 1. Preparar el fallback en disco (archivo NDJSON)
             if let Some(parent) = log_path.parent() {
-                if let Err(e) = create_dir_all(parent).await {
-                    eprintln!("AuditSpooler: Fallo al crear el directorio de logs {:?}: {}", parent, e);
-                    return;
-                }
+                let _ = create_dir_all(parent).await;
             }
 
-            let mut file = match OpenOptions::new()
+            let mut file_fallback = OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&log_path)
                 .await
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("AuditSpooler: Fallo al abrir el archivo de logs {:?}: {}", log_path, e);
-                    return;
-                }
+                .ok();
+
+            // 2. Preparar el cliente de Redis
+            let client = redis::Client::open(redis_url).ok();
+            let mut redis_con = if let Some(ref c) = client {
+                c.get_multiplexed_async_connection().await.ok()
+            } else {
+                None
             };
 
+            // 3. Procesar eventos de la cola
             while let Some(event) = receiver.recv().await {
-                // Formatear el evento como NDJSON (Newline Delimited JSON)
                 if let Ok(json_string) = serde_json::to_string(&event) {
-                    let log_entry = format!("{}\n", json_string);
-                    if let Err(e) = file.write_all(log_entry.as_bytes()).await {
-                        eprintln!("AuditSpooler: Error al escribir el evento en disco: {}", e);
+                    let mut sent_to_redis = false;
+
+                    // Intentar enviar a Redis Streams
+                    if let Some(con) = &mut redis_con {
+                        let result: Result<(), redis::RedisError> = con.xadd(
+                            "axiom:audit:stream",
+                            "*",
+                            &[("data", &json_string)]
+                        ).await;
+
+                        if result.is_ok() {
+                            sent_to_redis = true;
+                        } else {
+                            // Intentar reconectar si hubo un error (broker caído temporalmente)
+                            if let Some(client) = &client {
+                                if let Ok(new_con) = client.get_multiplexed_async_connection().await {
+                                    *con = new_con;
+                                    let retry: Result<(), redis::RedisError> = con.xadd(
+                                        "axiom:audit:stream",
+                                        "*",
+                                        &[("data", &json_string)]
+                                    ).await;
+                                    
+                                    if retry.is_ok() {
+                                        sent_to_redis = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Fallback a disco si Redis falló o no está disponible
+                    if !sent_to_redis {
+                        if let Some(f) = &mut file_fallback {
+                            let log_entry = format!("{}\n", json_string);
+                            let _ = f.write_all(log_entry.as_bytes()).await;
+                        }
                     }
                 }
             }
