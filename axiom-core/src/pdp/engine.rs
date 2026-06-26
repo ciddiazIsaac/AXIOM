@@ -2,7 +2,7 @@ use crate::error::AxiomError;
 use regorus::Engine;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
-use std::sync::mpsc::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 use crate::pdp::audit::{AuditEvent, AuditDecision};
 
 /// Estructura de decisión devuelta por el PDP
@@ -68,7 +68,7 @@ pub struct ZeroTrustRequest {
 #[derive(Clone)]
 pub struct ZeroTrustEngine {
     base_engine: Engine,
-    audit_sender: Option<Sender<AuditEvent>>,
+    audit_sender: Option<UnboundedSender<AuditEvent>>,
 }
 
 impl ZeroTrustEngine {
@@ -83,8 +83,8 @@ impl ZeroTrustEngine {
         })
     }
 
-    /// Configura el canal para emitir eventos de auditoría
-    pub fn with_audit(mut self, sender: Sender<AuditEvent>) -> Self {
+    /// Configura el canal para emitir eventos de auditoría (no bloqueante)
+    pub fn with_audit(mut self, sender: UnboundedSender<AuditEvent>) -> Self {
         self.audit_sender = Some(sender);
         self
     }

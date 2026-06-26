@@ -6,4 +6,4 @@ pub mod engine;
 pub mod audit;
 
 pub use engine::{ZeroTrustEngine, Decision, ZeroTrustRequest, DeviceContext, ResourceContext, EnvContext};
-pub use audit::{AuditEvent, AuditDecision};
+pub use audit::{AuditEvent, AuditDecision, AuditSpooler};

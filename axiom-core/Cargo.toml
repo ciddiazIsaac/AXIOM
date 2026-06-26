@@ -43,6 +43,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 regorus = { path = "../regorus-local", default-features = false, features = ["std", "arc"] }
 anyhow = "1.0.102"
+tokio = { version = "1.52.3", features = ["sync", "rt", "macros", "fs", "time", "io-util"] }
 
 [dev-dependencies]
 tempfile = "3"
