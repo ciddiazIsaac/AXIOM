@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: axiom-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: axiom-clickhouse
+    ports:
+      - "8123:8123" # HTTP interface
+      - "9000:9000" # Native interface
+    restart: unless-stopped
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+volumes:
+  redis_data:
+  clickhouse_data:
