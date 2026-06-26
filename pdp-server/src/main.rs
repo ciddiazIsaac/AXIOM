@@ -3,7 +3,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use axiom_core::pdp::{Decision, ZeroTrustEngine, ZeroTrustRequest};
+use axiom_core::pdp::{Decision, ZeroTrustEngine, ZeroTrustRequest, AuditSpooler};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
@@ -17,7 +17,15 @@ async fn main() {
     let policy = std::fs::read_to_string("../axiom-core/policies/zero_trust.rego")
         .expect("Failed to read zero_trust.rego policy file");
         
-    let engine = ZeroTrustEngine::new(&policy).expect("Failed to initialize PDP Engine");
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    
+    // Iniciar el Spooler en segundo plano
+    let log_path = std::path::PathBuf::from("./logs/audit.ndjson");
+    AuditSpooler::spawn(rx, log_path);
+
+    let engine = ZeroTrustEngine::new(&policy)
+        .expect("Failed to initialize PDP Engine")
+        .with_audit(tx);
     let state = AppState {
         engine: Arc::new(engine),
     };
