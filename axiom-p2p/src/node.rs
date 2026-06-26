@@ -7,10 +7,37 @@ use std::error::Error;
 use std::time::Duration;
 use tokio::time;
 use tokio::select;
+use tokio::sync::oneshot;
 
 use crate::behaviour::{ValidatorBehaviour, ValidatorBehaviourEvent};
 use crate::crdt::RevocationCrdt;
 use crate::message::{GossipPayload, RevocationMessage};
+
+/// Comandos programáticos para controlar el nodo.
+///
+/// Permite enviar revocaciones y queries desde código (tests, API)
+/// sin depender de stdin.
+pub enum NodeCommand {
+    /// Publica una revocación en la red.
+    Revoke {
+        credential_id: String,
+        issuer_did: String,
+        reason: String,
+    },
+    /// Consulta cuántas revocaciones tiene el CRDT.
+    QueryCount {
+        response: oneshot::Sender<usize>,
+    },
+    /// Consulta si una credencial está revocada.
+    IsRevoked {
+        credential_id: String,
+        response: oneshot::Sender<bool>,
+    },
+    /// Obtiene la dirección de escucha actual del nodo.
+    GetListenAddr {
+        response: oneshot::Sender<Option<Multiaddr>>,
+    },
+}
 
 pub struct NodeConfig {
     pub local_key: Keypair,
@@ -56,7 +83,44 @@ impl ValidatorNode {
         Ok(node)
     }
 
-    pub async fn run(mut self) {
+    /// Ejecuta el nodo con comandos de texto (desde stdin).
+    /// Convierte cada línea en un `NodeCommand` internamente.
+    pub async fn run(self, mut string_rx: tokio::sync::mpsc::Receiver<String>) {
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(100);
+
+        // Tarea que convierte strings a NodeCommand
+        tokio::spawn(async move {
+            while let Some(line) = string_rx.recv().await {
+                let cmd = line.trim().to_string();
+                if cmd.starts_with("revoke ") {
+                    let parts: Vec<&str> = cmd.split_whitespace().collect();
+                    if parts.len() == 2 {
+                        let _ = cmd_tx.send(NodeCommand::Revoke {
+                            credential_id: parts[1].to_string(),
+                            issuer_did: "did:axiom:local".to_string(),
+                            reason: "manual revocation".to_string(),
+                        }).await;
+                    } else {
+                        println!("[Validator] Uso: revoke <credential_id>");
+                    }
+                } else if cmd == "status" {
+                    let (tx, rx) = oneshot::channel();
+                    let _ = cmd_tx.send(NodeCommand::QueryCount { response: tx }).await;
+                    if let Ok(count) = rx.await {
+                        println!("[Validator] Revocaciones totales en CRDT: {}", count);
+                    }
+                } else if !cmd.is_empty() {
+                    println!("[Validator] Comando desconocido. Usa 'revoke <credential_id>' o 'status'");
+                }
+            }
+        });
+
+        self.run_with_commands(cmd_rx).await;
+    }
+
+    /// Ejecuta el nodo con comandos programáticos tipados.
+    /// Usado directamente por tests de integración.
+    pub async fn run_with_commands(mut self, mut command_rx: tokio::sync::mpsc::Receiver<NodeCommand>) {
         // Temporizador para comprobar la conexión con otros pares cada 30 segundos
         let mut no_peer_interval = time::interval(Duration::from_secs(30));
         no_peer_interval.tick().await; // Consumir el primer tick inmediato
@@ -70,6 +134,9 @@ impl ValidatorNode {
 
         loop {
             select! {
+                Some(cmd) = command_rx.recv() => {
+                    self.handle_command(cmd);
+                }
                 // Cada 30 segundos verificamos si hemos encontrado pares
                 _ = no_peer_interval.tick() => {
                     if !discovered_any {
@@ -95,6 +162,9 @@ impl ValidatorNode {
                                 println!("[Validator] mDNS descubrió al par: {}", peer_id);
                                 // Añadimos la dirección a la DHT de Kademlia
                                 self.swarm.behaviour_mut().kad.add_address(&peer_id, multiaddr);
+                                // Añadimos como par explícito de Gossipsub para que
+                                // pueda publicar sin esperar a la formación del mesh.
+                                self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                                 discovered_any = true;
                             }
                             // Si acabamos de descubrir pares y necesitamos sync, pedirlo
@@ -115,6 +185,8 @@ impl ValidatorNode {
                                 // Almacenamos la info de enrutamiento en Kademlia
                                 self.swarm.behaviour_mut().kad.add_address(&peer_id, addr);
                             }
+                            // Asegurar que Gossipsub puede comunicarse con este par
+                            self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                             discovered_any = true;
 
                             // Si acabamos de identificar pares y necesitamos sync, pedirlo
@@ -147,6 +219,36 @@ impl ValidatorNode {
                         _ => {}
                     }
                 }
+            }
+        }
+    }
+
+    /// Procesa un `NodeCommand` tipado.
+    fn handle_command(&mut self, cmd: NodeCommand) {
+        match cmd {
+            NodeCommand::Revoke { credential_id, issuer_did, reason } => {
+                let revocation = RevocationMessage {
+                    credential_id,
+                    issuer_did,
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    reason,
+                };
+                if let Err(e) = self.publish_revocation(&revocation) {
+                    println!("[Validator] Error al publicar revocación: {:?}", e);
+                }
+            }
+            NodeCommand::QueryCount { response } => {
+                let _ = response.send(self.crdt.count());
+            }
+            NodeCommand::IsRevoked { credential_id, response } => {
+                let _ = response.send(self.crdt.is_revoked(&credential_id));
+            }
+            NodeCommand::GetListenAddr { response } => {
+                let addrs: Vec<_> = self.swarm.listeners().cloned().collect();
+                let _ = response.send(addrs.into_iter().next());
             }
         }
     }

@@ -51,12 +51,12 @@ impl ValidatorBehaviour {
             .validation_mode(gossipsub::ValidationMode::Strict)
             .message_id_fn(message_id_fn)
             .build()
-            .map_err(|msg| std::io::Error::new(std::io::ErrorKind::Other, msg))?;
+            .map_err(std::io::Error::other)?;
 
         let mut gossipsub = gossipsub::Behaviour::new(
             gossipsub::MessageAuthenticity::Signed(local_key.clone()),
             gossipsub_config,
-        ).map_err(|msg| std::io::Error::new(std::io::ErrorKind::Other, msg))?;
+        ).map_err(std::io::Error::other)?;
 
         // Topic for revocations
         let topic = gossipsub::IdentTopic::new("axiom/revocations/1.0.0");
