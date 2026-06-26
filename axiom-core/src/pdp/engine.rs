@@ -1,6 +1,9 @@
 use crate::error::AxiomError;
 use regorus::Engine;
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
+use std::sync::mpsc::Sender;
+use crate::pdp::audit::{AuditEvent, AuditDecision};
 
 /// Estructura de decisión devuelta por el PDP
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -40,11 +43,17 @@ pub struct EnvContext {
 pub struct ResourceContext {
     /// Nombre o identificador del recurso
     pub name: String,
+    /// Hash criptográfico del recurso solicitado
+    pub hash: String,
 }
 
 /// Solicitud enviada al motor PDP para su evaluación
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ZeroTrustRequest {
+    /// Identificador único de la sesión
+    pub session_id: String,
+    /// Identidad del usuario que solicita acceso
+    pub user_did: String,
     /// Datos del dispositivo
     pub device: DeviceContext,
     /// Datos del entorno / geolocalización
@@ -59,6 +68,7 @@ pub struct ZeroTrustRequest {
 #[derive(Clone)]
 pub struct ZeroTrustEngine {
     base_engine: Engine,
+    audit_sender: Option<Sender<AuditEvent>>,
 }
 
 impl ZeroTrustEngine {
@@ -67,11 +77,21 @@ impl ZeroTrustEngine {
         let mut engine = Engine::new();
         engine.add_policy("zero_trust.rego".to_string(), rego_policy.to_string())
             .map_err(|e| AxiomError::InternalError(format!("Failed to compile Rego policy: {}", e)))?;
-        Ok(Self { base_engine: engine })
+        Ok(Self { 
+            base_engine: engine,
+            audit_sender: None,
+        })
+    }
+
+    /// Configura el canal para emitir eventos de auditoría
+    pub fn with_audit(mut self, sender: Sender<AuditEvent>) -> Self {
+        self.audit_sender = Some(sender);
+        self
     }
 
     /// Evalúa la solicitud contra las políticas de Zero Trust
     pub fn evaluate(&self, request: &ZeroTrustRequest) -> Result<Decision, AxiomError> {
+        let start_time = Instant::now();
         let mut engine = self.base_engine.clone();
         
         let input_json = serde_json::to_string(request)
@@ -87,6 +107,49 @@ impl ZeroTrustEngine {
         let requires_biometric = Self::eval_bool(&mut engine, "data.axiom.pdp.requires_biometric")?;
         let block = Self::eval_bool(&mut engine, "data.axiom.pdp.block")?;
         let alert = Self::eval_bool(&mut engine, "data.axiom.pdp.alert")?;
+        
+        let decision_type = if block {
+            AuditDecision::Deny
+        } else if requires_2fa || requires_biometric {
+            AuditDecision::Challenge
+        } else if allow {
+            AuditDecision::Allow
+        } else {
+            AuditDecision::Deny
+        };
+
+        // risk_score is loosely defined; using trust_score as a basis or calculating an arbitrary risk
+        // For actual calculation, the policy could return it, but here we estimate it based on inputs
+        let risk_score = 1.0 - request.device.trust_score;
+
+        let latency = start_time.elapsed();
+        let latency_ms = latency.as_secs_f64() * 1000.0;
+        
+        let timestamp_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+
+        if let Some(sender) = &self.audit_sender {
+            let context_snapshot = serde_json::json!({
+                "env": request.context,
+                "device": { "id": request.device.id },
+            });
+
+            let event = AuditEvent {
+                timestamp_ns,
+                session_id: request.session_id.clone(),
+                user_did: request.user_did.clone(),
+                resource_hash: request.resource.hash.clone(),
+                decision: decision_type,
+                risk_score,
+                context_snapshot,
+                latency_ms,
+            };
+
+            // Fire and forget (sin ralentizar la decisión)
+            let _ = sender.send(event);
+        }
 
         Ok(Decision {
             allow,
