@@ -281,6 +281,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "axiom-analytics"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "axiom-core"
 version = "0.1.0"
 dependencies = [

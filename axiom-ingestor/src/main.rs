@@ -3,9 +3,15 @@
 //! Lee eventos de auditoría del stream `axiom:audit:stream` usando
 //! XREADGROUP (consumer group `axiom_consumers`) y los inserta en
 //! ClickHouse usando su API HTTP nativa.
+//!
+//! ## Batch inserts
+//! En lugar de hacer 1 INSERT por evento, acumula hasta `BATCH_SIZE` eventos
+//! (env var, default 1000) y los vuelca en un único INSERT multi-VALUES.
+//! Si el buffer lleva más de `FLUSH_INTERVAL_MS` ms sin vaciarse (env var,
+//! default 500), se hace un flush anticipado aunque no se haya llenado.
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -18,10 +24,15 @@ const CONSUMER_GROUP: &str = "axiom_consumers";
 const CONSUMER_NAME: &str = "ingestor-1";
 const CLICKHOUSE_TABLE: &str = "audit_events";
 
-// ─── Esquema del evento (debe coincidir con audit.rs de axiom-core) ───────────
+/// Número máximo de eventos por batch INSERT (sobreescribible con BATCH_SIZE).
+const DEFAULT_BATCH_SIZE: usize = 1000;
 
-/// Decisión del PDP, deserializable desde el JSON del stream
-#[derive(Debug, Deserialize, Serialize)]
+/// Intervalo máximo entre flushes en milisegundos (sobreescribible con FLUSH_INTERVAL_MS).
+const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
+
+// ─── Esquema del evento ───────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "UPPERCASE")]
 enum AuditDecision {
     Allow,
@@ -39,8 +50,8 @@ impl std::fmt::Display for AuditDecision {
     }
 }
 
-/// Evento de auditoría tal como viene en el stream de Redis
-#[derive(Debug, Deserialize)]
+/// Evento de auditoría tal como viene en el stream de Redis.
+#[derive(Debug, Deserialize, Clone)]
 struct AuditEvent {
     timestamp_ns: u128,
     session_id: String,
@@ -74,7 +85,7 @@ fn flatten_context(val: &serde_json::Value) -> HashMap<String, String> {
     }
 }
 
-// ─── Inserción en ClickHouse ──────────────────────────────────────────────────
+// ─── Formateo SQL ─────────────────────────────────────────────────────────────
 
 /// Formatea el Map(String, String) de ClickHouse como literal SQL:
 /// {'key1': 'val1', 'key2': 'val2'}
@@ -93,21 +104,15 @@ fn format_ch_map(map: &HashMap<String, String>) -> String {
     format!("{{{}}}", entries.join(", "))
 }
 
-/// Inserta un evento en ClickHouse a través de su API HTTP (puerto 8123)
-async fn insert_into_clickhouse(
-    client: &reqwest::Client,
-    ch_url: &str,
-    event: &AuditEvent,
-) -> anyhow::Result<()> {
+/// Genera la tupla VALUES para un evento:
+/// (timestamp_ns, 'session_id', 'user_did', 'resource_hash', 'decision', risk_score, {context}, latency_ms)
+fn event_to_values_row(event: &AuditEvent) -> String {
     let context_map = flatten_context(&event.context_snapshot);
     let ch_map = format_ch_map(&context_map);
     let decision_str = event.decision.to_string();
 
-    // Usamos la API HTTP de ClickHouse con formato VALUES
-    let query = format!(
-        "INSERT INTO {CLICKHOUSE_TABLE} \
-         (timestamp_ns, session_id, user_did, resource_hash, decision, risk_score, context, latency_ms) \
-         VALUES ({}, '{}', '{}', '{}', '{}', {}, {}, {})",
+    format!(
+        "({}, '{}', '{}', '{}', '{}', {}, {}, {})",
         event.timestamp_ns,
         event.session_id.replace('\'', "\\'"),
         event.user_did.replace('\'', "\\'"),
@@ -116,6 +121,29 @@ async fn insert_into_clickhouse(
         event.risk_score,
         ch_map,
         event.latency_ms,
+    )
+}
+
+// ─── Inserción batch en ClickHouse ───────────────────────────────────────────
+
+/// Inserta un batch de eventos en ClickHouse con un único INSERT multi-VALUES.
+/// Devuelve Ok(()) si el INSERT tuvo éxito.
+async fn flush_batch(
+    client: &reqwest::Client,
+    ch_url: &str,
+    events: &[AuditEvent],
+) -> anyhow::Result<()> {
+    if events.is_empty() {
+        return Ok(());
+    }
+
+    // Construir el INSERT con todas las filas en un único statement
+    let rows: Vec<String> = events.iter().map(event_to_values_row).collect();
+    let query = format!(
+        "INSERT INTO {CLICKHOUSE_TABLE} \
+         (timestamp_ns, session_id, user_did, resource_hash, decision, risk_score, context, latency_ms) \
+         VALUES {}",
+        rows.join(", ")
     );
 
     let resp = client
@@ -126,7 +154,7 @@ async fn insert_into_clickhouse(
 
     if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow::anyhow!("ClickHouse INSERT fallido: {body}"));
+        return Err(anyhow::anyhow!("ClickHouse batch INSERT fallido: {body}"));
     }
 
     Ok(())
@@ -141,15 +169,24 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter("axiom_ingestor=info,warn")
         .init();
 
-    // Leer configuración desde variables de entorno (con valores por defecto para MVP)
+    // Leer configuración desde variables de entorno
     let redis_url = std::env::var("REDIS_URL")
         .unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
     let ch_url = std::env::var("CLICKHOUSE_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8123/".to_string());
+    let batch_size: usize = std::env::var("BATCH_SIZE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_BATCH_SIZE);
+    let flush_interval_ms: u64 = std::env::var("FLUSH_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_FLUSH_INTERVAL_MS);
 
-    info!("Iniciando axiom-ingestor...");
+    info!("Iniciando axiom-ingestor (batch mode)...");
     info!("Redis: {redis_url}");
     info!("ClickHouse: {ch_url}");
+    info!("BATCH_SIZE={batch_size}, FLUSH_INTERVAL_MS={flush_interval_ms}");
 
     // ── Conectar a Redis ──────────────────────────────────────────────────────
     let redis_client = redis::Client::open(redis_url.as_str())?;
@@ -175,89 +212,111 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Cliente HTTP para ClickHouse ──────────────────────────────────────────
     let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(30)) // timeout más amplio para batches grandes
         .build()?;
 
-    info!("Escuchando en '{REDIS_STREAM}'...");
+    info!("Escuchando en '{REDIS_STREAM}' (batch_size={batch_size})...");
+
+    // ── Buffer de eventos pendientes de flush ─────────────────────────────────
+    let mut event_buffer: Vec<AuditEvent> = Vec::with_capacity(batch_size);
+    // IDs de Redis de los eventos en el buffer (para hacer XACK masivo)
+    let mut id_buffer: Vec<String> = Vec::with_capacity(batch_size);
+    let mut last_flush = Instant::now();
+    let flush_interval = Duration::from_millis(flush_interval_ms);
 
     // ── Bucle principal de consumo ────────────────────────────────────────────
     loop {
-        // XREADGROUP: leer hasta 10 mensajes, bloquear 2s si no hay nuevos
+        // XREADGROUP: leer hasta 500 mensajes por iteración para llenar el buffer rápido
         let results: redis::RedisResult<redis::streams::StreamReadReply> = redis::cmd("XREADGROUP")
             .arg("GROUP")
             .arg(CONSUMER_GROUP)
             .arg(CONSUMER_NAME)
             .arg("COUNT")
-            .arg(10)
+            .arg(500)
             .arg("BLOCK")
-            .arg(2000) // ms
+            .arg(200) // ms – timeout corto para poder flushear por tiempo aunque no lleguen mensajes
             .arg("STREAMS")
             .arg(REDIS_STREAM)
             .arg(">") // Solo mensajes no entregados
             .query_async(&mut redis_con)
             .await;
 
-        let reply = match results {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("Error leyendo Redis Stream: {e}. Reintentando en 2s...");
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                continue;
-            }
-        };
+        // Procesar los mensajes recibidos (puede ser 0 si expiró el BLOCK timeout)
+        if let Ok(reply) = results {
+            for stream_key in reply.keys {
+                for entry in stream_key.ids {
+                    let msg_id = entry.id.clone();
 
-        for stream_key in reply.keys {
-            for entry in stream_key.ids {
-                let msg_id = &entry.id;
-
-                // Extraer el campo "data" del mensaje
-                let Some(raw_data) = entry.map.get("data") else {
-                    warn!("Mensaje {msg_id} sin campo 'data', haciendo ACK y saltando.");
-                    let _: redis::RedisResult<()> = redis_con
-                        .xack(REDIS_STREAM, CONSUMER_GROUP, &[msg_id])
-                        .await;
-                    continue;
-                };
-
-                // Deserializar el JSON del evento
-                let json_str = match raw_data {
-                    redis::Value::BulkString(bytes) => {
-                        String::from_utf8_lossy(bytes).to_string()
-                    }
-                    other => format!("{other:?}"),
-                };
-
-                let event: AuditEvent = match serde_json::from_str(&json_str) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        error!("Fallo al parsear evento {msg_id}: {e}. Raw: {json_str}");
-                        // ACK igual para no bloquear el stream con mensajes corruptos
+                    // Extraer el campo "data" del mensaje
+                    let Some(raw_data) = entry.map.get("data") else {
+                        warn!("Mensaje {msg_id} sin campo 'data', haciendo ACK y saltando.");
                         let _: redis::RedisResult<()> = redis_con
-                            .xack(REDIS_STREAM, CONSUMER_GROUP, &[msg_id])
+                            .xack(REDIS_STREAM, CONSUMER_GROUP, &[&msg_id])
                             .await;
                         continue;
-                    }
-                };
+                    };
 
-                // Insertar en ClickHouse
-                match insert_into_clickhouse(&http_client, &ch_url, &event).await {
-                    Ok(_) => {
-                        info!(
-                            msg_id = %msg_id,
-                            user_did = %event.user_did,
-                            decision = %event.decision,
-                            latency_ms = event.latency_ms,
-                            "Evento insertado en ClickHouse."
-                        );
-                        // ACK: confirmar al grupo que el mensaje fue procesado
-                        let _: redis::RedisResult<()> = redis_con
-                            .xack(REDIS_STREAM, CONSUMER_GROUP, &[msg_id])
-                            .await;
+                    // Deserializar el JSON del evento
+                    let json_str = match raw_data {
+                        redis::Value::BulkString(bytes) => {
+                            String::from_utf8_lossy(bytes).to_string()
+                        }
+                        other => format!("{other:?}"),
+                    };
+
+                    let event: AuditEvent = match serde_json::from_str(&json_str) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            error!("Fallo al parsear evento {msg_id}: {e}. Raw: {json_str}");
+                            // ACK para no bloquear el stream con mensajes corruptos
+                            let _: redis::RedisResult<()> = redis_con
+                                .xack(REDIS_STREAM, CONSUMER_GROUP, &[&msg_id])
+                                .await;
+                            continue;
+                        }
+                    };
+
+                    event_buffer.push(event);
+                    id_buffer.push(msg_id);
+                }
+            }
+        }
+
+        // ── Decidir si hay que flushear ───────────────────────────────────────
+        let should_flush_size = event_buffer.len() >= batch_size;
+        let should_flush_time = !event_buffer.is_empty() && last_flush.elapsed() >= flush_interval;
+
+        if should_flush_size || should_flush_time {
+            let n = event_buffer.len();
+            let reason = if should_flush_size { "size" } else { "timeout" };
+
+            match flush_batch(&http_client, &ch_url, &event_buffer).await {
+                Ok(()) => {
+                    info!(
+                        batch_size = n,
+                        flush_reason = reason,
+                        "Batch de {n} eventos insertado en ClickHouse."
+                    );
+                    // XACK masivo: confirmar todos los mensajes del batch de una vez
+                    let ids: Vec<&str> = id_buffer.iter().map(String::as_str).collect();
+                    let ack_result: redis::RedisResult<i64> = redis_con
+                        .xack(REDIS_STREAM, CONSUMER_GROUP, &ids)
+                        .await;
+                    if let Err(e) = ack_result {
+                        error!("Fallo en XACK masivo de {n} mensajes: {e}");
                     }
-                    Err(e) => {
-                        // No hacer ACK para que otro consumidor o un retry lo intente
-                        error!("Fallo al insertar evento {msg_id} en ClickHouse: {e}");
-                    }
+                    // Vaciar buffers tras flush exitoso
+                    event_buffer.clear();
+                    id_buffer.clear();
+                    last_flush = Instant::now();
+                }
+                Err(e) => {
+                    // NO limpiamos el buffer: reintentaremos en el próximo ciclo
+                    error!(
+                        batch_size = n,
+                        "Fallo al insertar batch de {n} eventos en ClickHouse: {e}. \
+                         Se reintentará en el próximo ciclo."
+                    );
                 }
             }
         }
