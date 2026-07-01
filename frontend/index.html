@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AXIOM - Consola de Accesos</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <div class="container">
+      <h1>AXIOM</h1>
+      <p>Zero Trust Architecture</p>
+
+      <!-- Pantalla Login -->
+      <div id="login-screen" class="screen active">
+        <h2>Login</h2>
+        <input type="text" id="did-input" value="did:axiom:test:demo-user-123" />
+        <button id="btn-login">Simular Firma</button>
+      </div>
+
+      <!-- Pantalla Dashboard -->
+      <div id="dashboard-screen" class="screen">
+        <h2>Dashboard de Riesgo</h2>
+        <p>Usuario: <span id="current-user"></span></p>
+        <div class="risk-card">
+          <h3>Anomaly Score</h3>
+          <div id="anomaly-score" class="score">Cargando...</div>
+          <div id="anomaly-details" class="details"></div>
+        </div>
+
+        <div class="actions">
+          <h3>Consola de Accesos</h3>
+          <button id="btn-resource-a">Pedir Acceso "Recurso A" (Público)</button>
+          <button id="btn-resource-admin">Pedir Acceso "Recurso Admin" (Restringido)</button>
+        </div>
+
+        <div id="access-result" class="result-card">
+          <!-- Resultado se inyecta aquí -->
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
