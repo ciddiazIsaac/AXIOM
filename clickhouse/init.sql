@@ -13,3 +13,27 @@ CREATE TABLE IF NOT EXISTS audit_events (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(created_at)
 ORDER BY (user_did, timestamp_ns);
+
+-- Tabla agregada para métricas por minuto por usuario
+CREATE TABLE IF NOT EXISTS audit_events_1m (
+    user_did      String,
+    window_start  DateTime,
+    latency_avg   AggregateFunction(avg, Float64),
+    latency_var   AggregateFunction(varSamp, Float64),
+    distance_p99  AggregateFunction(quantile(0.99), Float64)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(window_start)
+ORDER BY (user_did, window_start);
+
+-- Vista Materializada que puebla la tabla agregada
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_audit_events_1m
+TO audit_events_1m
+AS SELECT
+    user_did,
+    toStartOfMinute(created_at) AS window_start,
+    avgState(latency_ms) AS latency_avg,
+    varSampState(latency_ms) AS latency_var,
+    quantileState(0.99)(JSONExtractFloat(context['env'], 'distance_km')) AS distance_p99
+FROM audit_events
+GROUP BY user_did, window_start;
+
