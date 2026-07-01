@@ -9,8 +9,8 @@
 //!
 //! La respuesta incluye el z-score y un anomaly_score normalizado en [0,1].
 
-mod clickhouse;
-mod metrics;
+pub mod clickhouse;
+pub mod metrics;
 
 use std::sync::Arc;
 
@@ -31,14 +31,14 @@ use crate::metrics::{compute_anomaly, AnomalyResult, Metric};
 // ─── Estado compartido ────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct AppState {
-    ch: Arc<ClickHouseClient>,
+pub struct AppState {
+    pub ch: Arc<ClickHouseClient>,
 }
 
 // ─── Parámetros de la query string ───────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-struct AnomalyParams {
+pub struct AnomalyParams {
     /// DID del usuario a analizar (requerido)
     user_did: String,
     /// Ventana temporal en segundos (default: 300 = 5 minutos)
@@ -60,14 +60,14 @@ fn default_metric() -> String {
 // ─── Respuesta de error ───────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
+pub struct ErrorResponse {
+    pub error: String,
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 /// GET /anomaly_score
-async fn anomaly_score(
+pub async fn anomaly_score(
     State(state): State<AppState>,
     Query(params): Query<AnomalyParams>,
 ) -> Result<Json<AnomalyResult>, (StatusCode, Json<ErrorResponse>)> {

@@ -162,8 +162,7 @@ async fn flush_batch(
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+pub async fn run_ingestor() -> anyhow::Result<()> {
     // Inicializar logging estructurado
     tracing_subscriber::fmt()
         .with_env_filter("axiom_ingestor=info,warn")

@@ -9,14 +9,13 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 #[derive(Clone)]
-struct AppState {
-    engine: Arc<ZeroTrustEngine>,
-    http_client: reqwest::Client,
-    clickhouse_url: String,
+pub struct AppState {
+    pub engine: Arc<ZeroTrustEngine>,
+    pub http_client: reqwest::Client,
+    pub clickhouse_url: String,
 }
 
-#[tokio::main]
-async fn main() {
+pub async fn build_app_state() -> AppState {
     let policy = std::fs::read_to_string("../axiom-core/policies/zero_trust.rego")
         .expect("Failed to read zero_trust.rego policy file");
         
@@ -24,7 +23,7 @@ async fn main() {
     
     // Iniciar el Spooler en segundo plano con Redis como broker
     let log_path = std::path::PathBuf::from("./logs/audit.ndjson");
-    let redis_url = "redis://127.0.0.1:6379/".to_string();
+    let redis_url = "redis://redis:6379/".to_string(); // updated to docker dns
     AuditSpooler::spawn(rx, redis_url, log_path);
 
     let engine = ZeroTrustEngine::new(&policy)
@@ -34,26 +33,16 @@ async fn main() {
         .timeout(std::time::Duration::from_millis(500))
         .build()
         .unwrap();
-    let clickhouse_url = "http://127.0.0.1:8123/".to_string();
+    let clickhouse_url = "http://clickhouse:8123/".to_string(); // updated to docker dns
 
-    let state = AppState {
+    AppState {
         engine: Arc::new(engine),
         http_client,
         clickhouse_url,
-    };
-
-    let app = Router::new()
-        .route("/pdp/verify", post(verify_request))
-        .route("/anomaly_score", get(anomaly_score_handler))
-        .with_state(state);
-
-    let listener = TcpListener::bind("127.0.0.1:8080").await.unwrap();
-    println!("PDP Server running on http://127.0.0.1:8080");
-    
-    axum::serve(listener, app).await.unwrap();
+    }
 }
 
-async fn verify_request(
+pub async fn verify_request(
     State(state): State<AppState>,
     Json(payload): Json<ZeroTrustRequest>,
 ) -> Json<Decision> {
@@ -76,16 +65,16 @@ async fn verify_request(
 }
 
 #[derive(Deserialize)]
-struct AnomalyQuery {
-    user: String,
+pub struct AnomalyQuery {
+    pub user: String,
 }
 
 #[derive(Serialize)]
-struct AnomalyScore {
-    anomaly_score: f64,
-    baseline_mean: f64,
-    std_dev: f64,
-    is_outlier: bool,
+pub struct AnomalyScore {
+    pub anomaly_score: f64,
+    pub baseline_mean: f64,
+    pub std_dev: f64,
+    pub is_outlier: bool,
 }
 
 #[derive(Deserialize)]
@@ -111,7 +100,7 @@ struct ChLatestRow {
     distance_km: f64,
 }
 
-async fn anomaly_score_handler(
+pub async fn anomaly_score_handler(
     State(state): State<AppState>,
     Query(query): Query<AnomalyQuery>,
 ) -> Json<AnomalyScore> {
