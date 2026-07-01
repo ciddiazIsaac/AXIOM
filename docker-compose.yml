@@ -2,26 +2,58 @@ version: '3.8'
 
 services:
   redis:
-    image: redis:7-alpine
-    container_name: axiom-redis
+    image: redis:7.2-alpine
     ports:
       - "6379:6379"
-    restart: unless-stopped
-    command: redis-server --save 60 1 --loglevel warning
-    volumes:
-      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
-    container_name: axiom-clickhouse
+    image: clickhouse/clickhouse-server:23.8-alpine
     ports:
-      - "8123:8123" # HTTP interface
-      - "9000:9000" # Native interface
-    restart: unless-stopped
+      - "8123:8123"
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     volumes:
-      - clickhouse_data:/var/lib/clickhouse
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
 
-volumes:
-  redis_data:
-  clickhouse_data:
+  axiom-node:
+    build: .
+    ports:
+      - "3000:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis:6379/
+      - CLICKHOUSE_URL=http://clickhouse:8123/
+      - PORT=3000
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - axiom-node
+
+  grafana:
+    image: grafana/grafana:10.1.0
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - axiom-node
+      - prometheus
+      - clickhouse
