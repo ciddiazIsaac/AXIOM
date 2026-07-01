@@ -4,7 +4,7 @@ use axum::{
 };
 use tower_http::services::ServeDir;
 use prometheus_client::registry::Registry;
-use prometheus_client::metrics::counter::Family;
+use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::histogram::Histogram;
 use prometheus_client::encoding::text::encode;
@@ -71,12 +71,14 @@ async fn main() -> anyhow::Result<()> {
             listen_addr: "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
             bootstrap_nodes: vec![],
         };
-        match ValidatorNode::new(config) {
-            Ok(mut node) => {
-                node.run(rx_p2p).await;
+        let mut node = match ValidatorNode::new(config) {
+            Ok(n) => n,
+            Err(e) => {
+                error!("Error inicializando Nodo P2P: {}", e);
+                return;
             }
-            Err(e) => error!("Error inicializando Nodo P2P: {}", e),
-        }
+        };
+        node.run(rx_p2p).await;
     });
 
     // 4. Levantar el Servidor HTTP unificado
