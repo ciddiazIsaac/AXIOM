@@ -24,10 +24,12 @@ services:
     volumes:
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
 
+  # ─── Nodo 1: Nodo raíz de la red P2P ─────────────────────────────────────
   axiom-node:
     build: .
     ports:
-      - "3000:3000"
+      - "3000:3000"   # API HTTP + SPA
+      - "4001:4001"   # P2P libp2p TCP
     depends_on:
       redis:
         condition: service_healthy
@@ -37,6 +39,28 @@ services:
       - REDIS_URL=redis://redis:6379/
       - CLICKHOUSE_URL=http://clickhouse:8123/
       - PORT=3000
+      - P2P_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4001
+
+  # ─── Nodo 2: Segundo nodo para demo de descentralización P2P ─────────────
+  # mDNS (habilitado en behaviour.rs) descubre axiom-node automáticamente
+  # dentro de la red bridge de Docker — sin hardcodear PeerId.
+  axiom-node-2:
+    build: .
+    ports:
+      - "3002:3000"   # API HTTP + SPA (puerto externo diferente)
+      - "4002:4002"   # P2P libp2p TCP
+    depends_on:
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      axiom-node:
+        condition: service_started
+    environment:
+      - REDIS_URL=redis://redis:6379/
+      - CLICKHOUSE_URL=http://clickhouse:8123/
+      - PORT=3000
+      - P2P_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4002
 
   prometheus:
     image: prom/prometheus:v2.47.0
