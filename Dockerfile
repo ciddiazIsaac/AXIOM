@@ -1,5 +1,5 @@
 # Etapa 1: Construcción
-FROM rust:1.70 AS builder
+FROM rust:latest AS builder
 
 WORKDIR /usr/src/app
 
@@ -13,6 +13,7 @@ COPY axiom-p2p ./axiom-p2p
 COPY axiom-ingestor ./axiom-ingestor
 COPY axiom-analytics ./axiom-analytics
 COPY axiom-node ./axiom-node
+COPY regorus-local ./regorus-local
 
 # Compilar en modo release
 RUN cargo build --release -p axiom-node
