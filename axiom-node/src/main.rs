@@ -1,6 +1,6 @@
 use axum::{
     routing::{get, post},
-    Router, extract::State, response::IntoResponse,
+    Router, response::IntoResponse,
 };
 use tower_http::services::ServeDir;
 use prometheus_client::registry::Registry;
@@ -10,7 +10,6 @@ use prometheus_client::metrics::histogram::Histogram;
 use prometheus_client::encoding::text::encode;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use libp2p::PeerId;
 use tracing::{info, error};
 
 // Imports de otros subsistemas
@@ -62,16 +61,23 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // 3. Levantar el Nodo P2P en background
-    let (tx_p2p, rx_p2p) = tokio::sync::mpsc::channel(100);
+    // P2P_LISTEN_ADDR permite fijar un puerto predecible para que el segundo nodo pueda
+    // conectarse. Default: tcp/4001 (puerto fijo, no efímero).
+    let p2p_listen_addr: libp2p::Multiaddr = std::env::var("P2P_LISTEN_ADDR")
+        .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/4001".to_string())
+        .parse()
+        .expect("P2P_LISTEN_ADDR inválido");
+
+    let (_tx_p2p, rx_p2p) = tokio::sync::mpsc::channel(100);
     tokio::spawn(async move {
-        info!("Iniciando Nodo P2P...");
+        info!("Iniciando Nodo P2P en {}", p2p_listen_addr);
         let local_key = Keypair::generate_ed25519();
         let config = NodeConfig {
             local_key,
-            listen_addr: "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+            listen_addr: p2p_listen_addr,
             bootstrap_nodes: vec![],
         };
-        let mut node = match ValidatorNode::new(config) {
+        let node = match ValidatorNode::new(config) {
             Ok(n) => n,
             Err(e) => {
                 error!("Error inicializando Nodo P2P: {}", e);
@@ -121,8 +127,13 @@ async fn main() -> anyhow::Result<()> {
             }
             buffer.into_response()
         }))
-        // Frontend SPA servido desde la raíz
-        .fallback_service(ServeDir::new("../frontend/dist"))
+        // Frontend SPA servido desde la raíz.
+        // FRONTEND_DIR permite sobrescribir la ruta en local vs Docker:
+        //   - Local (cargo run desde /AXIOM): FRONTEND_DIR=./frontend/dist
+        //   - Docker (binario en /usr/local/bin/): usa default ../frontend/dist
+        .fallback_service(ServeDir::new(
+            std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../frontend/dist".to_string())
+        ))
         .with_state(unified_state);
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
