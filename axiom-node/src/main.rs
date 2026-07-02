@@ -72,10 +72,13 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         info!("Iniciando Nodo P2P en {}", p2p_listen_addr);
         let local_key = Keypair::generate_ed25519();
+        let crdt_db_path = std::env::var("CRDT_DB_PATH").unwrap_or_else(|_| "crdt_state.db".to_string());
+        
         let config = NodeConfig {
             local_key,
             listen_addr: p2p_listen_addr,
             bootstrap_nodes: vec![],
+            storage_path: Some(crdt_db_path),
         };
         let node = match ValidatorNode::new(config) {
             Ok(n) => n,
