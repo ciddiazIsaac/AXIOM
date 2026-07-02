@@ -68,16 +68,31 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .expect("P2P_LISTEN_ADDR inválido");
 
-    let (_tx_p2p, rx_p2p) = tokio::sync::mpsc::channel(100);
+    let (tx_p2p, rx_p2p) = tokio::sync::mpsc::channel(100);
     tokio::spawn(async move {
         info!("Iniciando Nodo P2P en {}", p2p_listen_addr);
         let local_key = Keypair::generate_ed25519();
-        let crdt_db_path = std::env::var("CRDT_DB_PATH").unwrap_or_else(|_| "crdt_state.db".to_string());
+        let crdt_db_path = std::env::var("CRDT_DB_PATH").unwrap_or_else(|_| {
+            let fallback_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis().to_string();
+            let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| fallback_id);
+            format!("/data/crdt_{}.db", hostname)
+        });
         
+        let dial_addrs_str = std::env::var("P2P_DIAL_ADDRS").unwrap_or_default();
+        let mut dial_addrs = vec![];
+        if !dial_addrs_str.is_empty() {
+            for addr_str in dial_addrs_str.split(',') {
+                if let Ok(addr) = addr_str.trim().parse() {
+                    dial_addrs.push(addr);
+                }
+            }
+        }
+
         let config = NodeConfig {
             local_key,
             listen_addr: p2p_listen_addr,
             bootstrap_nodes: vec![],
+            dial_addrs,
             storage_path: Some(crdt_db_path),
         };
         let node = match ValidatorNode::new(config) {
@@ -106,18 +121,28 @@ async fn main() -> anyhow::Result<()> {
         pdp: PdpState,
         analytics: AnalyticsState,
         metrics: MetricsState,
+        p2p_tx: tokio::sync::mpsc::Sender<String>,
     }
 
     let unified_state = AppStateUnified {
         pdp: pdp_state,
         analytics: analytics_state,
         metrics: metrics_state,
+        p2p_tx: tx_p2p,
     };
 
     let app = Router::new()
         // API Endpoints
         .route("/v1/evaluate", post(|axum::extract::State(state): axum::extract::State<AppStateUnified>, payload| async move {
             verify_request(axum::extract::State(state.pdp), payload).await
+        }))
+        .route("/v1/revoke", post(|axum::extract::State(state): axum::extract::State<AppStateUnified>, axum::extract::Json(payload): axum::extract::Json<serde_json::Value>| async move {
+            if let Some(cred_id) = payload.get("credential_id").and_then(|v| v.as_str()) {
+                let _ = state.p2p_tx.send(format!("revoke {}", cred_id)).await;
+                (axum::http::StatusCode::OK, "Revocation injected").into_response()
+            } else {
+                (axum::http::StatusCode::BAD_REQUEST, "Missing credential_id").into_response()
+            }
         }))
         .route("/v1/anomaly_score", get(|axum::extract::State(state): axum::extract::State<AppStateUnified>, query| async move {
             anomaly_score(axum::extract::State(state.analytics), query).await

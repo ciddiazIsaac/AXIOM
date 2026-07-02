@@ -43,12 +43,14 @@ pub struct NodeConfig {
     pub local_key: Keypair,
     pub listen_addr: Multiaddr,
     pub bootstrap_nodes: Vec<(PeerId, Multiaddr)>,
+    pub dial_addrs: Vec<Multiaddr>,
     pub storage_path: Option<String>,
 }
 
 pub struct ValidatorNode {
     swarm: Swarm<ValidatorBehaviour>,
     bootstrap_nodes: Vec<(PeerId, Multiaddr)>,
+    dial_addrs: Vec<Multiaddr>,
     crdt: RevocationCrdt,
     /// Flag: si acabamos de unirnos a la red y necesitamos pedir el estado completo.
     needs_sync: bool,
@@ -75,6 +77,7 @@ impl ValidatorNode {
         let mut node = Self {
             swarm,
             bootstrap_nodes: config.bootstrap_nodes,
+            dial_addrs: config.dial_addrs,
             crdt,
             needs_sync: true, // Al arrancar, necesitamos sync
         };
@@ -133,8 +136,8 @@ impl ValidatorNode {
 
         let mut discovered_any = false;
 
-        // Intentar arranque inicial si hay nodos bootstrap
-        if !self.bootstrap_nodes.is_empty() {
+        // Intentar arranque inicial si hay nodos bootstrap o direcciones a marcar
+        if !self.bootstrap_nodes.is_empty() || !self.dial_addrs.is_empty() {
             self.attempt_bootstrap();
         }
 
@@ -382,7 +385,15 @@ impl ValidatorNode {
                 println!("[Validator] Proceso de bootstrap iniciado.");
             }
         } else {
-            println!("[Validator] No hay nodos bootstrap disponibles para conectar.");
+            println!("[Validator] No hay nodos bootstrap Kademlia configurados.");
+        }
+
+        // Marcar direcciones directas si están configuradas
+        for addr in &self.dial_addrs {
+            println!("[Validator] Marcando dirección inicial: {}", addr);
+            if let Err(e) = self.swarm.dial(addr.clone()) {
+                println!("[Validator] Fallo al marcar dirección {}: {:?}", addr, e);
+            }
         }
     }
 }
