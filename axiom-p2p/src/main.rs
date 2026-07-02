@@ -69,6 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         local_key,
         listen_addr,
         bootstrap_nodes,
+        storage_path: None,
     };
 
     let node = ValidatorNode::new(config)?;

@@ -26,6 +26,7 @@ fn spawn_node_bg(port: u16) -> (mpsc::Sender<NodeCommand>, libp2p::PeerId) {
         local_key: key,
         listen_addr,
         bootstrap_nodes: vec![],
+        storage_path: None,
     };
 
     let node = ValidatorNode::new(config).expect("fallo al crear nodo");

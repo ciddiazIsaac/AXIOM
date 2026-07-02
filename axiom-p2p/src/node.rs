@@ -43,6 +43,7 @@ pub struct NodeConfig {
     pub local_key: Keypair,
     pub listen_addr: Multiaddr,
     pub bootstrap_nodes: Vec<(PeerId, Multiaddr)>,
+    pub storage_path: Option<String>,
 }
 
 pub struct ValidatorNode {
@@ -66,10 +67,15 @@ impl ValidatorNode {
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
 
+        let crdt = match &config.storage_path {
+            Some(path) => RevocationCrdt::with_storage(path)?,
+            None => RevocationCrdt::new(),
+        };
+
         let mut node = Self {
             swarm,
             bootstrap_nodes: config.bootstrap_nodes,
-            crdt: RevocationCrdt::new(),
+            crdt,
             needs_sync: true, // Al arrancar, necesitamos sync
         };
 

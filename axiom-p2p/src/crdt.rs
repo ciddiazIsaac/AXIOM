@@ -1,5 +1,7 @@
 use automerge::{AutoCommit, ObjType, ReadDoc, transaction::Transactable};
 use crate::message::RevocationMessage;
+use rusqlite::Connection;
+use std::path::{Path, PathBuf};
 
 /// Estado global de revocaciones respaldado por Automerge CRDT.
 ///
@@ -24,6 +26,7 @@ use crate::message::RevocationMessage;
 /// garantiza convergencia eventual sin importar el orden de entrega.
 pub struct RevocationCrdt {
     doc: AutoCommit,
+    db_path: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for RevocationCrdt {
@@ -48,7 +51,69 @@ impl RevocationCrdt {
     /// independientes.
     pub fn new() -> Self {
         let doc = AutoCommit::new();
-        Self { doc }
+        Self { doc, db_path: None }
+    }
+
+    /// Crea un `RevocationCrdt` respaldado por una base de datos SQLite.
+    /// 
+    /// Si la base de datos ya contiene un estado previo, lo carga.
+    /// De lo contrario, inicializa un documento vacío que se irá
+    /// persistiendo con cada cambio.
+    pub fn with_storage<P: AsRef<Path>>(path: P) -> Result<Self, anyhow::Error> {
+        let path_buf = path.as_ref().to_path_buf();
+        let db = Connection::open(&path_buf)?;
+        
+        // Crear tabla si no existe
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS crdt_state (
+                key TEXT PRIMARY KEY NOT NULL,
+                value BLOB NOT NULL,
+                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+            )",
+            [],
+        )?;
+
+        let mut doc = AutoCommit::new();
+
+        // Intentar cargar el estado guardado
+        {
+            let mut stmt = db.prepare("SELECT value FROM crdt_state WHERE key = 'doc_state'")?;
+            let mut rows = stmt.query([])?;
+            
+            if let Some(row) = rows.next()? {
+                let data: Vec<u8> = row.get(0)?;
+                match AutoCommit::load(&data) {
+                    Ok(loaded_doc) => {
+                        doc = loaded_doc;
+                    }
+                    Err(e) => {
+                        eprintln!("[CRDT] WARN: Previous state corrupted, starting fresh: {:?}", e);
+                    }
+                }
+            }
+        }
+
+        Ok(Self { doc, db_path: Some(path_buf) })
+    }
+
+    /// Guarda el estado completo en la base de datos si está configurada.
+    fn persist(&mut self) {
+        if let Some(path) = &self.db_path {
+            let data = self.doc.save();
+            match Connection::open(path) {
+                Ok(db) => {
+                    if let Err(e) = db.execute(
+                        "INSERT OR REPLACE INTO crdt_state (key, value) VALUES ('doc_state', ?1)",
+                        rusqlite::params![data],
+                    ) {
+                        eprintln!("[CRDT] Error persistiendo estado a la BD: {:?}", e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[CRDT] Error abriendo BD para persistir: {:?}", e);
+                }
+            }
+        }
     }
 
     /// Inserta una revocación en el documento Automerge.
@@ -74,6 +139,8 @@ impl RevocationCrdt {
             .expect("fallo al escribir timestamp");
         self.doc.put(&entry_id, "reason", revocation.reason.as_str())
             .expect("fallo al escribir reason");
+
+        self.persist();
 
         !already_exists
     }
@@ -121,6 +188,7 @@ impl RevocationCrdt {
     /// sin importar el orden de llegada.
     pub fn apply_incremental(&mut self, bytes: &[u8]) -> Result<(), automerge::AutomergeError> {
         self.doc.load_incremental(bytes)?;
+        self.persist();
         Ok(())
     }
 
@@ -139,6 +207,7 @@ impl RevocationCrdt {
     pub fn merge_full(&mut self, bytes: &[u8]) -> Result<(), automerge::AutomergeError> {
         let mut other = AutoCommit::load(bytes)?;
         self.doc.merge(&mut other)?;
+        self.persist();
         Ok(())
     }
 
@@ -148,7 +217,7 @@ impl RevocationCrdt {
     /// y carga desde disco, o que recibe un snapshot completo).
     pub fn load_full(bytes: &[u8]) -> Result<Self, automerge::AutomergeError> {
         let doc = AutoCommit::load(bytes)?;
-        Ok(Self { doc })
+        Ok(Self { doc, db_path: None })
     }
 
     // ─── Helpers privados ───────────────────────────────────────────────
@@ -327,5 +396,27 @@ mod tests {
         assert!(node2.is_revoked("cred-from-node2"));
         assert_eq!(node1.count(), 2);
         assert_eq!(node2.count(), 2);
+    }
+
+    #[test]
+    fn test_sqlite_persistence() {
+        let db_path = "test_sqlite_persistence.db";
+        let _ = std::fs::remove_file(db_path); // Limpiar antes del test
+
+        // 1. Crear con almacenamiento y añadir una revocación
+        {
+            let mut crdt = RevocationCrdt::with_storage(db_path).unwrap();
+            crdt.add(&make_revocation("cred-persist"));
+            assert!(crdt.is_revoked("cred-persist"));
+        }
+
+        // 2. Cargar desde almacenamiento y verificar
+        {
+            let crdt2 = RevocationCrdt::with_storage(db_path).unwrap();
+            assert!(crdt2.is_revoked("cred-persist"));
+            assert_eq!(crdt2.count(), 1);
+        }
+
+        let _ = std::fs::remove_file(db_path); // Limpiar después del test
     }
 }
