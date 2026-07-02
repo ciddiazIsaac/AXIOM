@@ -24,12 +24,15 @@ services:
     volumes:
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
 
-  # ─── Nodo 1: Nodo raíz de la red P2P ─────────────────────────────────────
-  axiom-node:
+  # ─── Nodo Bootstrap: Nodo fijo de entrada a la red P2P ───────────────────
+  # Actúa como punto de entrada conocido. Todos los axiom-node le pasan
+  # --bootstrap /ip4/axiom-bootstrap/tcp/4001 vía P2P_DIAL_ADDRS.
+  axiom-bootstrap:
     build: .
+    hostname: axiom-bootstrap
     ports:
-      - "3000:3000"   # API HTTP + SPA
-      - "4001:4001"   # P2P libp2p TCP
+      - "3000:3000"   # API HTTP (punto de entrada para el script de carga)
+      - "4001:4001"   # P2P libp2p TCP (puerto FIJO para que los nodos lo encuentren)
     depends_on:
       redis:
         condition: service_healthy
@@ -40,27 +43,57 @@ services:
       - CLICKHOUSE_URL=http://clickhouse:8123/
       - PORT=3000
       - P2P_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4001
+      - CRDT_DB_PATH=/data/crdt_bootstrap.db
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/metrics || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    # Descomenta para throttling controlado en máquinas con menos recursos:
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '0.5'
+    #       memory: 256M
 
-  # ─── Nodo 2: Segundo nodo para demo de descentralización P2P ─────────────
-  # mDNS (habilitado en behaviour.rs) descubre axiom-node automáticamente
-  # dentro de la red bridge de Docker — sin hardcodear PeerId.
-  axiom-node-2:
+  # ─── Nodos Escalables: Se conectan al bootstrap ──────────────────────────
+  # Uso: docker-compose up -d --scale axiom-node=50
+  #
+  # CRDT_DB_PATH: NO se fija aquí intencionalmente. El código en main.rs
+  # construye la ruta usando $HOSTNAME (inyectado automáticamente por Docker
+  # como el nombre del contenedor, ej: axiom-axiom-node-3), garantizando
+  # que cada contenedor escriba en su propio archivo .db sin colisiones.
+  # Ver: axiom-node/src/main.rs líneas 75-79.
+  axiom-node:
     build: .
     ports:
-      - "3002:3000"   # API HTTP + SPA (puerto externo diferente)
-      - "4002:4002"   # P2P libp2p TCP
+      - "0:3000"   # Docker asigna puerto HTTP aleatorio al host (sin conflictos)
+      - "0:4001"   # Docker asigna puerto P2P aleatorio al host (el contenedor siempre escucha en 4001)
     depends_on:
       redis:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
-      axiom-node:
-        condition: service_started
+      axiom-bootstrap:
+        condition: service_healthy
     environment:
       - REDIS_URL=redis://redis:6379/
       - CLICKHOUSE_URL=http://clickhouse:8123/
       - PORT=3000
-      - P2P_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4002
+      - P2P_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4001
+      - P2P_DIAL_ADDRS=/ip4/axiom-bootstrap/tcp/4001
+      # CRDT_DB_PATH no se establece aquí → main.rs la genera como /data/crdt_<HOSTNAME>.db
+    volumes:
+      - ./data:/data
+    # Descomenta para throttling controlado (útil si la máquina tiene <16 GB):
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '0.25'
+    #       memory: 128M
 
   prometheus:
     image: prom/prometheus:v2.47.0
@@ -69,15 +102,17 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
     depends_on:
-      - axiom-node
+      - axiom-bootstrap
 
   grafana:
     image: grafana/grafana:10.1.0
     ports:
       - "3001:3000"
+    environment:
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
     depends_on:
-      - axiom-node
+      - axiom-bootstrap
       - prometheus
       - clickhouse

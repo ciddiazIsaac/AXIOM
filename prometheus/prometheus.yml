@@ -1,7 +1,29 @@
 global:
   scrape_interval: 5s
+  evaluation_interval: 5s
 
 scrape_configs:
-  - job_name: 'axiom-node'
+  # ─── Bootstrap: puerto fijo, siempre presente ───────────────────────────────
+  - job_name: 'axiom-bootstrap'
     static_configs:
-      - targets: ['axiom-node:3000']
+      - targets: ['axiom-bootstrap:3000']
+        labels:
+          role: 'bootstrap'
+
+  # ─── Nodos Escalables: DNS SD descubre automáticamente todos los contenedores
+  # que docker-compose crea al hacer --scale axiom-node=N.
+  # Docker's embedded DNS resuelve 'axiom-node' a TODAS las IPs de los contenedores
+  # con ese nombre de servicio. Prometheus itera sobre ellas automáticamente.
+  - job_name: 'axiom-nodes'
+    dns_sd_configs:
+      - names:
+          - 'axiom-node'
+        type: 'A'
+        port: 3000
+        refresh_interval: 10s
+    relabel_configs:
+      # Añadir la IP del nodo como label para poder filtrar en Grafana
+      - source_labels: [__address__]
+        target_label: instance
+      - target_label: role
+        replacement: 'worker'

@@ -19,11 +19,10 @@ COPY regorus-local ./regorus-local
 RUN cargo build --release -p axiom-node
 
 # Etapa 2: Imagen mínima
-FROM alpine:3.18
+FROM debian:bookworm-slim
 
-# Instalar dependencias dinámicas que rust necesita (como libgcc, libssl si se usa reqwest con openssl, etc.)
-# Para compilar puramente estático habria que usar x86_64-unknown-linux-musl pero alpine base requiere glibc/libgcc compat
-RUN apk add --no-cache ca-certificates libgcc libstdc++ gcc gcompat
+# Instalar certificados y dependencias dinámicas comunes
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/local/bin
 
