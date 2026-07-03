@@ -15,7 +15,7 @@ pub struct AppState {
     pub engine: Arc<ZeroTrustEngine>,
     pub http_client: reqwest::Client,
     pub clickhouse_url: String,
-    pub anomaly_detector: Option<Arc<AnomalyDetector>>,
+    pub anomaly_detector: Arc<tokio::sync::RwLock<Option<Arc<AnomalyDetector>>>>,
 }
 
 pub async fn build_app_state() -> AppState {
@@ -40,7 +40,7 @@ pub async fn build_app_state() -> AppState {
     
     // Carga de modelo ONNX con fallback inteligente
     let model_path = "../anomaly_model.onnx";
-    let anomaly_detector = match AnomalyDetector::new(model_path) {
+    let detector_opt = match AnomalyDetector::new(model_path) {
         Ok(detector) => {
             info!("Modelo ONNX cargado en el PDP.");
             Some(Arc::new(detector))
@@ -50,6 +50,56 @@ pub async fn build_app_state() -> AppState {
             None
         }
     };
+    
+    let anomaly_detector = Arc::new(tokio::sync::RwLock::new(detector_opt));
+    
+    // Spawn watcher for hot-reloading
+    let detector_state_clone = anomaly_detector.clone();
+    let model_path_str = model_path.to_string();
+    tokio::spawn(async move {
+        use notify::{Watcher, RecursiveMode, EventKind};
+        use std::sync::mpsc::channel;
+        
+        let (tx, rx) = channel();
+        let mut watcher = match notify::recommended_watcher(tx) {
+            Ok(w) => w,
+            Err(e) => {
+                warn!("Fallo al iniciar el observador de archivos (notify): {}", e);
+                return;
+            }
+        };
+        
+        if let Err(e) = watcher.watch(std::path::Path::new(&model_path_str), RecursiveMode::NonRecursive) {
+            warn!("No se pudo observar {}: {}", model_path_str, e);
+            return;
+        }
+        
+        info!("Observador de hot-reload iniciado para {}", model_path_str);
+        
+        // Bloqueante en un hilo de background
+        tokio::task::spawn_blocking(move || {
+            let _w = watcher; // Mantener vivo el watcher
+            for res in rx {
+                if let Ok(event) = res {
+                    if let EventKind::Modify(_) = event.kind {
+                        info!("Detectado cambio en {}, preparando hot-reload...", model_path_str);
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        
+                        match AnomalyDetector::new(&model_path_str) {
+                            Ok(new_detector) => {
+                                let mut writer = detector_state_clone.blocking_write();
+                                *writer = Some(Arc::new(new_detector));
+                                info!("Modelo hot-reloaded exitosamente (Zero Downtime).");
+                            }
+                            Err(e) => {
+                                tracing::error!("Fallo el hot-reload del modelo, manteniendo el anterior: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    });
 
     AppState {
         engine: Arc::new(engine),
@@ -81,7 +131,8 @@ pub async fn verify_request(
     };
 
     // Shadow Mode: Ejecutar la IA sin bloquear la decisión (Pruebas A/B)
-    if let Some(detector) = &state.anomaly_detector {
+    let detector_opt = state.anomaly_detector.read().await.clone();
+    if let Some(detector) = detector_opt {
         // Preparar características para la IA (6 características esperadas)
         // features = [latency_ms, risk_score, distance_km, hour_of_day, decision, device_trust_score]
         
@@ -238,7 +289,8 @@ pub async fn anomaly_score_handler(
     
     let mut anomaly_score = 0.0;
     
-    if let Some(detector) = &state.anomaly_detector {
+    let detector_opt = state.anomaly_detector.read().await.clone();
+    if let Some(detector) = detector_opt {
         // Modo Predictivo con IA
         use chrono::Timelike;
         let hour_of_day = chrono::Utc::now().hour() as f32;
