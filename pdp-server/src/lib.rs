@@ -5,14 +5,17 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use axiom_core::pdp::{Decision, ZeroTrustEngine, ZeroTrustRequest, AuditSpooler};
+use axiom_core::ml::anomaly::AnomalyDetector;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tracing::{info, warn};
 
 #[derive(Clone)]
 pub struct AppState {
     pub engine: Arc<ZeroTrustEngine>,
     pub http_client: reqwest::Client,
     pub clickhouse_url: String,
+    pub anomaly_detector: Option<Arc<AnomalyDetector>>,
 }
 
 pub async fn build_app_state() -> AppState {
@@ -34,11 +37,25 @@ pub async fn build_app_state() -> AppState {
         .build()
         .unwrap();
     let clickhouse_url = "http://clickhouse:8123/".to_string(); // updated to docker dns
+    
+    // Carga de modelo ONNX con fallback inteligente
+    let model_path = "../anomaly_model.onnx";
+    let anomaly_detector = match AnomalyDetector::new(model_path) {
+        Ok(detector) => {
+            info!("Modelo ONNX cargado en el PDP.");
+            Some(Arc::new(detector))
+        }
+        Err(e) => {
+            warn!("Fallo al cargar el modelo ONNX desde {}: {}. Decadencia a estadísticas clásicas.", model_path, e);
+            None
+        }
+    };
 
     AppState {
         engine: Arc::new(engine),
         http_client,
         clickhouse_url,
+        anomaly_detector,
     }
 }
 
@@ -48,20 +65,67 @@ pub async fn verify_request(
 ) -> Json<Decision> {
     // In a real scenario we'd handle errors properly and maybe return 403 or 400
     // But for fast evaluation we just unwrap or handle the error gracefully
-    match state.engine.evaluate(&payload) {
-        Ok(decision) => Json(decision),
+    let mut final_decision = match state.engine.evaluate(&payload) {
+        Ok(decision) => decision,
         Err(e) => {
             eprintln!("Evaluation error: {}", e);
             // Default deny on error
-            Json(Decision {
+            Decision {
                 allow: false,
                 requires_2fa: true,
                 requires_biometric: true,
                 block: true,
                 alert: true,
-            })
+            }
+        }
+    };
+
+    // Shadow Mode: Ejecutar la IA sin bloquear la decisión (Pruebas A/B)
+    if let Some(detector) = &state.anomaly_detector {
+        // Preparar características para la IA (6 características esperadas)
+        // features = [latency_ms, risk_score, distance_km, hour_of_day, decision, device_trust_score]
+        
+        use chrono::Timelike;
+        let hour_of_day = chrono::Utc::now().hour() as f32;
+        let risk_score = 100.0 - (payload.device.trust_score * 100.0); // Aproximación
+        let distance = payload.context.distance_km;
+        
+        let features = vec![
+            50.0, // latency_ms (podríamos usar el tiempo real si lo medimos aquí)
+            risk_score, 
+            distance, 
+            hour_of_day,
+            if final_decision.allow { 0.0 } else { 1.0 }, // 0=ALLOW, 1=DENY
+            payload.device.trust_score * 100.0
+        ];
+        
+        if let Some(ai_score) = detector.predict(features) {
+            let ai_decision = if ai_score > 0.8 {
+                "DENY"
+            } else if ai_score > 0.5 {
+                "CHALLENGE"
+            } else {
+                "ALLOW"
+            };
+            
+            let rego_decision = if !final_decision.allow { "DENY" } else if final_decision.requires_2fa { "CHALLENGE" } else { "ALLOW" };
+            
+            info!("Shadow Mode => Rego says {}, AI says {} (Score: {:.3})", rego_decision, ai_decision, ai_score);
+            
+            // Lógica híbrida real (COMENTADA HASTA VALIDAR EL SHADOW MODE):
+            /*
+            if ai_score > 0.8 || !final_decision.allow {
+                final_decision.allow = false;
+                final_decision.block = true;
+            } else if ai_score > 0.5 {
+                final_decision.requires_2fa = true;
+                final_decision.allow = false;
+            }
+            */
         }
     }
+
+    Json(final_decision)
 }
 
 #[derive(Deserialize)]
@@ -75,6 +139,7 @@ pub struct AnomalyScore {
     pub baseline_mean: f64,
     pub std_dev: f64,
     pub is_outlier: bool,
+    pub threshold: f64, // Umbral de decisión retornado
 }
 
 #[derive(Deserialize)]
@@ -171,12 +236,38 @@ pub async fn anomaly_score_handler(
 
     let is_outlier = is_latency_outlier || is_distance_outlier;
     
-    // An arbitrary anomaly_score calculation just to return a float between 0 and 1
-    // Using sigmoid-like over the Z-score for latency, or 1.0 if distance outlier
-    let z_score = if std_dev > 0.0 { (current_latency - mean) / std_dev } else { 0.0 };
-    let mut anomaly_score = if z_score > 0.0 { 1.0 - (1.0 / (1.0 + z_score)) } else { 0.0 };
-    if is_distance_outlier {
-        anomaly_score = 0.99; // Cap at 0.99 for distance outlier if not captured by Z-score
+    let mut anomaly_score = 0.0;
+    
+    if let Some(detector) = &state.anomaly_detector {
+        // Modo Predictivo con IA
+        use chrono::Timelike;
+        let hour_of_day = chrono::Utc::now().hour() as f32;
+        let features = vec![
+            current_latency as f32,
+            50.0, // risk_score aproximado
+            current_distance as f32,
+            hour_of_day,
+            0.0, // decision aproximada
+            80.0, // device_trust_score aproximado
+        ];
+        
+        if let Some(ai_score) = detector.predict(features) {
+            anomaly_score = ai_score as f64;
+        } else {
+            // Fallback en caso de error interno del detector
+            let z_score = if std_dev > 0.0 { (current_latency - mean) / std_dev } else { 0.0 };
+            anomaly_score = if z_score > 0.0 { 1.0 - (1.0 / (1.0 + z_score)) } else { 0.0 };
+            if is_distance_outlier {
+                anomaly_score = 0.99;
+            }
+        }
+    } else {
+        // Fallback a Modo Estadístico (Z-Score)
+        let z_score = if std_dev > 0.0 { (current_latency - mean) / std_dev } else { 0.0 };
+        anomaly_score = if z_score > 0.0 { 1.0 - (1.0 / (1.0 + z_score)) } else { 0.0 };
+        if is_distance_outlier {
+            anomaly_score = 0.99;
+        }
     }
 
     Json(AnomalyScore {
@@ -184,5 +275,6 @@ pub async fn anomaly_score_handler(
         baseline_mean: mean,
         std_dev,
         is_outlier,
+        threshold: 0.7, // Umbral fijo
     })
 }
