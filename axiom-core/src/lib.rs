@@ -33,6 +33,8 @@ pub mod did;
 pub mod error;
 pub mod keys;
 pub mod pdp;
+/// Módulo de Machine Learning para detección de anomalías
+pub mod ml;
 
 pub use error::AxiomError;
 pub use keys::HybridKeyPair;
