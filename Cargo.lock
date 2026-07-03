@@ -3026,6 +3026,7 @@ dependencies = [
  "axum",
  "chrono",
  "notify",
+ "prometheus-client",
  "redis 0.27.6",
  "reqwest",
  "serde",
