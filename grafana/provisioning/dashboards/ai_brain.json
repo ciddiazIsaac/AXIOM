@@ -1,0 +1,206 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": 3,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Percentiles p50, p95 y p99 de los scores de anomalía producidos por el modelo ONNX. Valores cercanos a 1.0 indican tráfico anómalo generalizado.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "max": 1,
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "red", "value": 0.8 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 0 },
+      "id": 10,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(ai_anomaly_score_bucket[1m])) by (le))",
+          "legendFormat": "p50 (mediana)",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(ai_anomaly_score_bucket[1m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(ai_anomaly_score_bucket[1m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "🧠 Distribución de Scores de Anomalía (IA)",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Score de anomalía mediano actual. Objetivo: < 0.3 en condiciones normales.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "min": 0,
+          "max": 1,
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "red", "value": 0.8 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 0 },
+      "id": 11,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(ai_anomaly_score_bucket[5m])) by (le))",
+          "legendFormat": "Score Mediano",
+          "refId": "A"
+        }
+      ],
+      "title": "Score de Anomalía Actual (p50)",
+      "type": "stat"
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Tasa de decisiones por segundo desglosada por fuente (IA vs Rego) y tipo (ALLOW/DENY/CHALLENGE). Permite detectar divergencias entre la IA y las reglas de negocio.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "lineWidth": 1,
+            "stacking": { "group": "A", "mode": "none" },
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "ai - DENY" }, "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "rego - DENY" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF780A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "ai - ALLOW" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "rego - ALLOW" }, "properties": [{ "id": "color", "value": { "fixedColor": "#37872D", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "ai - CHALLENGE" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "rego - CHALLENGE" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E0B400", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 14, "x": 0, "y": 9 },
+      "id": 12,
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(ai_decision_total[1m])) by (source, decision)",
+          "legendFormat": "{{source}} - {{decision}}",
+          "refId": "A"
+        }
+      ],
+      "title": "⚖️ Decisiones IA vs Reglas Rego (req/s)",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Latencia p99 de la inferencia ONNX en milisegundos. SLO: < 10ms. Umbral rojo en 10ms.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "min": 0,
+          "max": 50,
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 10, "x": 14, "y": 9 },
+      "id": 13,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(ai_inference_duration_seconds_bucket[1m])) by (le)) * 1000",
+          "legendFormat": "p99 latencia (ms)",
+          "refId": "A"
+        }
+      ],
+      "title": "⚡ Latencia de Inferencia ONNX p99 (SLO < 10ms)",
+      "type": "gauge"
+    }
+
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["axiom", "ai", "anomaly"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "AXIOM — AI Brain",
+  "uid": "axiom-ai-brain",
+  "version": 1,
+  "weekStart": ""
+}
