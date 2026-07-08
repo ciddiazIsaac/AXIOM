@@ -171,7 +171,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/evaluate", post(|axum::extract::State(state): axum::extract::State<AppStateUnified>, payload| async move {
             verify_request(axum::extract::State(state.pdp), payload).await
         }))
-        .route("/v1/revoke", post(|axum::extract::State(state): axum::extract::State<AppStateUnified>, axum::extract::Json(payload): axum::extract::Json<serde_json::Value>| async move {
+        .route("/v1/revoke", post(|headers: axum::http::HeaderMap, axum::extract::State(state): axum::extract::State<AppStateUnified>, axum::extract::Json(payload): axum::extract::Json<serde_json::Value>| async move {
+            let expected_token = std::env::var("ADMIN_TOKEN").unwrap_or_else(|_| "secret-admin-token".to_string());
+            let auth_header = headers.get(axum::http::header::AUTHORIZATION)
+                .and_then(|val| val.to_str().ok())
+                .unwrap_or("");
+            
+            if auth_header != format!("Bearer {}", expected_token) {
+                return (axum::http::StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+            }
+
             if let Some(cred_id) = payload.get("credential_id").and_then(|v| v.as_str()) {
                 let _ = state.p2p_tx.send(format!("revoke {}", cred_id)).await;
                 (axum::http::StatusCode::OK, "Revocation injected").into_response()
