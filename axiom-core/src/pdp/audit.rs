@@ -70,8 +70,8 @@ impl AuditSpooler {
 
             // 2. Preparar el cliente de Redis
             let client = redis::Client::open(redis_url).ok();
-            let mut redis_con = if let Some(ref c) = client {
-                c.get_multiplexed_async_connection().await.ok()
+            let mut redis_con = if let Some(c) = client {
+                redis::aio::ConnectionManager::new(c).await.ok()
             } else {
                 None
             };
@@ -91,22 +91,6 @@ impl AuditSpooler {
 
                         if result.is_ok() {
                             sent_to_redis = true;
-                        } else {
-                            // Intentar reconectar si hubo un error (broker caído temporalmente)
-                            if let Some(client) = &client {
-                                if let Ok(new_con) = client.get_multiplexed_async_connection().await {
-                                    *con = new_con;
-                                    let retry: Result<(), redis::RedisError> = con.xadd(
-                                        "axiom:audit:stream",
-                                        "*",
-                                        &[("data", &json_string)]
-                                    ).await;
-                                    
-                                    if retry.is_ok() {
-                                        sent_to_redis = true;
-                                    }
-                                }
-                            }
                         }
                     }
 
