@@ -185,7 +185,7 @@ pub async fn verify_request(
         
         // ── Medir latencia de inferencia ──────────────────────────────────
         let t0 = Instant::now();
-        if let Some(ai_score) = detector.predict(features) {
+        if let Some(ai_score) = detector.predict(features).await {
             let inference_secs = t0.elapsed().as_secs_f64();
 
             // Emitir las 3 métricas de la IA
@@ -350,7 +350,7 @@ pub async fn anomaly_score_handler(
             80.0,
         ];
         
-        if let Some(ai_score) = detector.predict(features) {
+        if let Some(ai_score) = detector.predict(features).await {
             anomaly_score = ai_score as f64;
         } else {
             let z_score = if std_dev > 0.0 { (current_latency - mean) / std_dev } else { 0.0 };
