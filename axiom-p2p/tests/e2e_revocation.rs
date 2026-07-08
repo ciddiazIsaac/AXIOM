@@ -17,15 +17,18 @@ use tokio::time::{sleep, Duration, timeout};
 
 
 /// Helper mejorado: crea y arranca un nodo, devuelve solo el sender + peer_id.
-fn spawn_node_bg(port: u16) -> (mpsc::Sender<NodeCommand>, libp2p::PeerId) {
+fn spawn_node_bg(port: u16, dial: Option<Multiaddr>) -> (mpsc::Sender<NodeCommand>, libp2p::PeerId) {
     let key = Keypair::generate_ed25519();
     let peer_id = libp2p::PeerId::from(key.public());
     let listen_addr: Multiaddr = format!("/ip4/127.0.0.1/tcp/{}", port).parse().unwrap();
+
+    let dial_addrs = if let Some(d) = dial { vec![d] } else { vec![] };
 
     let config = NodeConfig {
         local_key: key,
         listen_addr,
         bootstrap_nodes: vec![],
+        dial_addrs,
         storage_path: None,
     };
 
@@ -67,9 +70,10 @@ async fn test_two_nodes_revocation_propagation() {
     println!("  E2E TEST: Propagación de Revocación");
     println!("========================================\n");
 
-    // 1. Arrancar dos nodos
-    let (tx_a, peer_a) = spawn_node_bg(19100);
-    let (tx_b, peer_b) = spawn_node_bg(19101);
+    // 1. Arrancar dos nodos, B marca explícitamente a A como dial_addr para evitar depender de mDNS
+    let addr_a: Multiaddr = "/ip4/127.0.0.1/tcp/19100".parse().unwrap();
+    let (tx_a, peer_a) = spawn_node_bg(19100, None);
+    let (tx_b, peer_b) = spawn_node_bg(19101, Some(addr_a));
 
     println!("[Test] Nodo A: {}", peer_a);
     println!("[Test] Nodo B: {}", peer_b);
@@ -140,8 +144,10 @@ async fn test_multiple_revocations_converge() {
     println!("  E2E TEST: Convergencia Múltiple");
     println!("========================================\n");
 
-    let (tx_a, _peer_a) = spawn_node_bg(19200);
-    let (tx_b, _peer_b) = spawn_node_bg(19201);
+    let addr_a: Multiaddr = "/ip4/127.0.0.1/tcp/19200".parse().unwrap();
+    let (tx_a, _) = spawn_node_bg(19200, None);
+    let (tx_b, _) = spawn_node_bg(19201, Some(addr_a.clone()));
+    let (tx_c, _) = spawn_node_bg(19202, Some(addr_a));
 
     // Esperar descubrimiento mDNS
     sleep(Duration::from_secs(10)).await;

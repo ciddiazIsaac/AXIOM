@@ -144,7 +144,7 @@ impl ValidatorNode {
         loop {
             select! {
                 Some(cmd) = command_rx.recv() => {
-                    self.handle_command(cmd);
+                    self.handle_command(cmd).await;
                 }
                 // Cada 30 segundos verificamos si hemos encontrado pares
                 _ = no_peer_interval.tick() => {
@@ -222,7 +222,7 @@ impl ValidatorNode {
                         // Eventos Gossipsub — Integración con Automerge CRDT
                         // ═══════════════════════════════════════════════════
                         SwarmEvent::Behaviour(ValidatorBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
-                            self.handle_gossipsub_message(&message.data);
+                            self.handle_gossipsub_message(&message.data).await;
                         }
                         
                         _ => {}
@@ -233,7 +233,7 @@ impl ValidatorNode {
     }
 
     /// Procesa un `NodeCommand` tipado.
-    fn handle_command(&mut self, cmd: NodeCommand) {
+    async fn handle_command(&mut self, cmd: NodeCommand) {
         match cmd {
             NodeCommand::Revoke { credential_id, issuer_did, reason } => {
                 let revocation = RevocationMessage {
@@ -245,7 +245,7 @@ impl ValidatorNode {
                         .as_secs(),
                     reason,
                 };
-                if let Err(e) = self.publish_revocation(&revocation) {
+                if let Err(e) = self.publish_revocation(&revocation).await {
                     println!("[Validator] Error al publicar revocación: {:?}", e);
                 }
             }
@@ -268,11 +268,11 @@ impl ValidatorNode {
     /// - `RevocationChange`: aplica el delta incremental de Automerge
     /// - `SyncRequest`: responde con el estado completo del CRDT
     /// - `SyncResponse`: fusiona el estado completo recibido
-    fn handle_gossipsub_message(&mut self, data: &[u8]) {
+    async fn handle_gossipsub_message(&mut self, data: &[u8]) {
         match serde_json::from_slice::<GossipPayload>(data) {
             Ok(GossipPayload::RevocationChange(change_bytes)) => {
                 println!("[Validator] Cambio incremental de Automerge recibido ({} bytes)", change_bytes.len());
-                match self.crdt.apply_incremental(&change_bytes) {
+                match self.crdt.apply_incremental(&change_bytes).await {
                     Ok(()) => {
                         println!(
                             "[Validator] CRDT actualizado. Total revocaciones: {}",
@@ -297,7 +297,7 @@ impl ValidatorNode {
                     "[Validator] SyncResponse recibido ({} bytes). Fusionando...",
                     full_bytes.len()
                 );
-                match self.crdt.merge_full(&full_bytes) {
+                match self.crdt.merge_full(&full_bytes).await {
                     Ok(()) => {
                         self.needs_sync = false;
                         println!(
@@ -321,9 +321,9 @@ impl ValidatorNode {
     /// 1. Inserta la revocación en el documento Automerge local
     /// 2. Genera el delta incremental
     /// 3. Lo envuelve en `GossipPayload::RevocationChange` y lo publica
-    pub fn publish_revocation(&mut self, revocation: &RevocationMessage) -> Result<(), Box<dyn Error>> {
+    pub async fn publish_revocation(&mut self, revocation: &RevocationMessage) -> Result<(), Box<dyn Error>> {
         // Mutar el documento Automerge local
-        let is_new = self.crdt.add(revocation);
+        let is_new = self.crdt.add(revocation).await;
 
         if is_new {
             println!(
