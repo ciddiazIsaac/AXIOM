@@ -70,6 +70,7 @@ pub struct ZeroTrustRequest {
 #[derive(Clone)]
 pub struct ZeroTrustEngine {
     base_engine: Engine,
+    pool: std::sync::Arc<std::sync::Mutex<Vec<Engine>>>,
     audit_sender: Option<UnboundedSender<AuditEvent>>,
 }
 
@@ -81,6 +82,7 @@ impl ZeroTrustEngine {
             .map_err(|e| AxiomError::InternalError(format!("Failed to compile Rego policy: {}", e)))?;
         Ok(Self { 
             base_engine: engine,
+            pool: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             audit_sender: None,
         })
     }
@@ -94,7 +96,11 @@ impl ZeroTrustEngine {
     /// Evalúa la solicitud contra las políticas de Zero Trust
     pub fn evaluate(&self, request: &ZeroTrustRequest) -> Result<Decision, AxiomError> {
         let start_time = Instant::now();
-        let mut engine = self.base_engine.clone();
+        
+        let mut engine = {
+            let mut pool = self.pool.lock().unwrap();
+            pool.pop().unwrap_or_else(|| self.base_engine.clone())
+        };
         
         let input_json = serde_json::to_string(request)
             .map_err(|e| AxiomError::InternalError(format!("Failed to serialize input: {}", e)))?;
@@ -104,11 +110,31 @@ impl ZeroTrustEngine {
             
         engine.set_input(input_val);
         
-        let allow = Self::eval_bool(&mut engine, "data.axiom.pdp.allow")?;
-        let requires_2fa = Self::eval_bool(&mut engine, "data.axiom.pdp.requires_2fa")?;
-        let requires_biometric = Self::eval_bool(&mut engine, "data.axiom.pdp.requires_biometric")?;
-        let block = Self::eval_bool(&mut engine, "data.axiom.pdp.block")?;
-        let alert = Self::eval_bool(&mut engine, "data.axiom.pdp.alert")?;
+        let results = engine.eval_query("data.axiom.pdp".to_string(), false)
+            .map_err(|e| AxiomError::InternalError(format!("Query failed: {}", e)))?;
+            
+        // Regresamos el engine al pool inmediatamente
+        {
+            let mut pool = self.pool.lock().unwrap();
+            pool.push(engine);
+        }
+            
+        let val = results.result.first().ok_or_else(|| {
+            AxiomError::InternalError("No result for data.axiom.pdp".to_string())
+        })?;
+        
+        let exprs = &val.expressions;
+        let pdp_obj = if let Some(v) = exprs.first() {
+            serde_json::to_value(&v.value).unwrap_or(serde_json::Value::Null)
+        } else {
+            serde_json::Value::Null
+        };
+
+        let allow = pdp_obj.get("allow").and_then(|v| v.as_bool()).unwrap_or(false);
+        let requires_2fa = pdp_obj.get("requires_2fa").and_then(|v| v.as_bool()).unwrap_or(false);
+        let requires_biometric = pdp_obj.get("requires_biometric").and_then(|v| v.as_bool()).unwrap_or(false);
+        let block = pdp_obj.get("block").and_then(|v| v.as_bool()).unwrap_or(false);
+        let alert = pdp_obj.get("alert").and_then(|v| v.as_bool()).unwrap_or(false);
         
         let decision_type = if block {
             AuditDecision::Deny
@@ -182,21 +208,4 @@ impl ZeroTrustEngine {
         })
     }
 
-    fn eval_bool(engine: &mut Engine, query: &str) -> Result<bool, AxiomError> {
-        let results = engine.eval_query(query.to_string(), false)
-            .map_err(|e| AxiomError::InternalError(format!("Query failed {}: {}", query, e)))?;
-            
-        let val = results.result.first().ok_or_else(|| {
-            AxiomError::InternalError(format!("No result for {}", query))
-        })?;
-        
-        let exprs = &val.expressions;
-        if let Some(v) = exprs.first() {
-            if let Ok(b) = v.value.as_bool() {
-                return Ok(*b);
-            }
-        }
-        
-        Ok(false)
-    }
 }
