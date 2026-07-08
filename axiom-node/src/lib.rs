@@ -55,39 +55,7 @@ pub async fn run_server() -> anyhow::Result<()> {
     let p2p_peers_connected = Gauge::<i64>::default();
     registry.register("p2p_peers_connected", "Peers P2P conectados", p2p_peers_connected.clone());
 
-    // ── Métricas del cerebro IA ───────────────────────────────────────────────
-    // Histograma de scores: 10 buckets uniformes en [0, 1]
-    let ai_anomaly_score = Histogram::new(
-        [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0_f64].into_iter()
-    );
-    registry.register(
-        "ai_anomaly_score",
-        "Distribución de scores de anomalía de la IA [0=normal, 1=anomalía]",
-        ai_anomaly_score.clone(),
-    );
-
-    // Contador de decisiones por fuente (ai/rego) y resultado (ALLOW/DENY/CHALLENGE)
-    let ai_decision_total = Family::<Vec<(String, String)>, prometheus_client::metrics::counter::Counter>::default();
-    registry.register(
-        "ai_decision_total",
-        "Decisiones por fuente (source=ai|rego) y tipo (decision=ALLOW|DENY|CHALLENGE)",
-        ai_decision_total.clone(),
-    );
-
-    // Histograma de latencia de inferencia ONNX (objetivo < 10ms)
-    let ai_inference_duration_seconds = Histogram::new(
-        [0.001, 0.002, 0.005, 0.010, 0.020, 0.050, 0.100_f64].into_iter()
-    );
-    registry.register(
-        "ai_inference_duration_seconds",
-        "Latencia de inferencia ONNX en segundos (SLO: < 10ms)",
-        ai_inference_duration_seconds.clone(),
-    );
-
     let ai_metrics = AiMetrics {
-        anomaly_score: ai_anomaly_score,
-        decision_total: ai_decision_total,
-        inference_duration_seconds: ai_inference_duration_seconds,
         pdp_decision_total,
         pdp_latency_seconds,
     };

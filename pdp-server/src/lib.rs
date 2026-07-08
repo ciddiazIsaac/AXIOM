@@ -4,7 +4,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use axiom_core::pdp::{Decision, ZeroTrustEngine, ZeroTrustRequest, AuditSpooler};
-use axiom_core::ml::anomaly::AnomalyDetector;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{info, warn};
@@ -19,12 +18,6 @@ use prometheus_client::metrics::counter::Counter;
 /// a build_app_state para que los handlers puedan emitirlas.
 #[derive(Clone)]
 pub struct AiMetrics {
-    /// Histograma de scores de anomalía [0.0, 1.0]
-    pub anomaly_score: Histogram,
-    /// Contador de decisiones por fuente (ai/rego) y tipo (ALLOW/DENY/CHALLENGE)
-    pub decision_total: Family<Vec<(String, String)>, Counter>,
-    /// Duración de inferencia ONNX en segundos (objetivo < 10ms)
-    pub inference_duration_seconds: Histogram,
     pub pdp_decision_total: Family<Vec<(String, String)>, Counter>,
     pub pdp_latency_seconds: Histogram,
 }
@@ -36,7 +29,6 @@ pub struct AppState {
     pub engine: Arc<ZeroTrustEngine>,
     pub http_client: reqwest::Client,
     pub clickhouse_url: String,
-    pub anomaly_detector: Arc<tokio::sync::RwLock<Option<Arc<AnomalyDetector>>>>,
     pub ai_metrics: AiMetrics,
 }
 
@@ -62,73 +54,10 @@ pub async fn build_app_state(ai_metrics: AiMetrics) -> AppState {
         .unwrap();
     let clickhouse_url = "http://clickhouse:8123/".to_string();
     
-    // Carga de modelo ONNX con fallback inteligente
-    let model_path = "../anomaly_model.onnx";
-    let detector_opt = match AnomalyDetector::new(model_path) {
-        Ok(detector) => {
-            info!("Modelo ONNX cargado en el PDP.");
-            Some(Arc::new(detector))
-        }
-        Err(e) => {
-            warn!("Fallo al cargar el modelo ONNX desde {}: {}. Decadencia a estadísticas clásicas.", model_path, e);
-            None
-        }
-    };
-    
-    let anomaly_detector = Arc::new(tokio::sync::RwLock::new(detector_opt));
-    
-    // Spawn watcher para hot-reloading (Zero Downtime)
-    let detector_state_clone = anomaly_detector.clone();
-    let model_path_str = model_path.to_string();
-    tokio::spawn(async move {
-        use notify::{Watcher, RecursiveMode, EventKind};
-        use std::sync::mpsc::channel;
-        
-        let (tx, rx) = channel();
-        let mut watcher = match notify::recommended_watcher(tx) {
-            Ok(w) => w,
-            Err(e) => {
-                warn!("Fallo al iniciar el observador de archivos (notify): {}", e);
-                return;
-            }
-        };
-        
-        if let Err(e) = watcher.watch(std::path::Path::new(&model_path_str), RecursiveMode::NonRecursive) {
-            warn!("No se pudo observar {}: {}", model_path_str, e);
-            return;
-        }
-        
-        info!("Observador de hot-reload iniciado para {}", model_path_str);
-        
-        tokio::task::spawn_blocking(move || {
-            let _w = watcher;
-            for res in rx {
-                if let Ok(event) = res {
-                    if let EventKind::Modify(_) = event.kind {
-                        info!("Detectado cambio en {}, preparando hot-reload...", model_path_str);
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        
-                        match AnomalyDetector::new(&model_path_str) {
-                            Ok(new_detector) => {
-                                let mut writer = detector_state_clone.blocking_write();
-                                *writer = Some(Arc::new(new_detector));
-                                info!("Modelo hot-reloaded exitosamente (Zero Downtime).");
-                            }
-                            Err(e) => {
-                                tracing::error!("Fallo el hot-reload del modelo, manteniendo el anterior: {}", e);
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    });
-
     AppState {
         engine: Arc::new(engine),
         http_client,
         clickhouse_url,
-        anomaly_detector,
         ai_metrics,
     }
 }
@@ -175,70 +104,7 @@ pub async fn verify_request(
     state.ai_metrics.pdp_latency_seconds.observe(latency_secs);
     
     // Además podemos mantener el de AI (que usa tags source=rego) si el dashboard lo usa
-    state.ai_metrics.decision_total
-        .get_or_create(&vec![
-            ("source".to_string(), "rego".to_string()),
-            ("decision".to_string(), rego_decision.to_string()),
-        ])
-        .inc();
-
-    // Shadow Mode: Ejecutar la IA, registrar métricas, no bloquear la decisión
-    let detector_opt = state.anomaly_detector.read().await.clone();
-    if let Some(detector) = detector_opt {
-        use chrono::Timelike;
-        let hour_of_day = chrono::Utc::now().hour() as f32;
-        let risk_score = 100.0 - (payload.device.trust_score * 100.0);
-        let distance = payload.context.distance_km;
-        
-        let features = vec![
-            50.0, // latency_ms
-            risk_score, 
-            distance, 
-            hour_of_day,
-            if final_decision.allow { 0.0 } else { 1.0 },
-            payload.device.trust_score * 100.0
-        ];
-        
-        // ── Medir latencia de inferencia ──────────────────────────────────
-        let t0 = Instant::now();
-        if let Some(ai_score) = detector.predict(features).await {
-            let inference_secs = t0.elapsed().as_secs_f64();
-
-            // Emitir las 3 métricas de la IA
-            state.ai_metrics.inference_duration_seconds.observe(inference_secs);
-            state.ai_metrics.anomaly_score.observe(ai_score as f64);
-
-            let ai_decision = if ai_score > 0.8 {
-                "DENY"
-            } else if ai_score > 0.5 {
-                "CHALLENGE"
-            } else {
-                "ALLOW"
-            };
-            state.ai_metrics.decision_total
-                .get_or_create(&vec![
-                    ("source".to_string(), "ai".to_string()),
-                    ("decision".to_string(), ai_decision.to_string()),
-                ])
-                .inc();
-
-            info!(
-                "Shadow Mode => Rego: {}, AI: {} (score={:.3}, latency={:.2}ms)",
-                rego_decision, ai_decision, ai_score, inference_secs * 1000.0
-            );
-
-            // Lógica híbrida real (COMENTADA HASTA VALIDAR EL SHADOW MODE):
-            /*
-            if ai_score > 0.8 || !final_decision.allow {
-                final_decision.allow = false;
-                final_decision.block = true;
-            } else if ai_score > 0.5 {
-                final_decision.requires_2fa = true;
-                final_decision.allow = false;
-            }
-            */
-        }
-    }
+    // ya no lo mantenemos porque borramos decision_total
 
     Json(final_decision)
 }
@@ -351,33 +217,9 @@ pub async fn anomaly_score_handler(
     let is_distance_outlier = p99 > 0.0 && current_distance > p99;
     let is_outlier = is_latency_outlier || is_distance_outlier;
     
-    let mut anomaly_score = 0.0;
-    
-    let detector_opt = state.anomaly_detector.read().await.clone();
-    if let Some(detector) = detector_opt {
-        use chrono::Timelike;
-        let hour_of_day = chrono::Utc::now().hour() as f32;
-        let features = vec![
-            current_latency as f32,
-            50.0,
-            current_distance as f32,
-            hour_of_day,
-            0.0,
-            80.0,
-        ];
-        
-        if let Some(ai_score) = detector.predict(features).await {
-            anomaly_score = ai_score as f64;
-        } else {
-            let z_score = if std_dev > 0.0 { (current_latency - mean) / std_dev } else { 0.0 };
-            anomaly_score = if z_score > 0.0 { 1.0 - (1.0 / (1.0 + z_score)) } else { 0.0 };
-            if is_distance_outlier { anomaly_score = 0.99; }
-        }
-    } else {
-        let z_score = if std_dev > 0.0 { (current_latency - mean) / std_dev } else { 0.0 };
-        anomaly_score = if z_score > 0.0 { 1.0 - (1.0 / (1.0 + z_score)) } else { 0.0 };
-        if is_distance_outlier { anomaly_score = 0.99; }
-    }
+    let z_score = if std_dev > 0.0 { (current_latency - mean) / std_dev } else { 0.0 };
+    let mut anomaly_score = if z_score > 0.0 { 1.0 - (1.0 / (1.0 + z_score)) } else { 0.0 };
+    if is_distance_outlier { anomaly_score = 0.99; }
 
     Json(AnomalyScore {
         anomaly_score,
