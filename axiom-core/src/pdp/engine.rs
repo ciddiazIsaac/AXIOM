@@ -98,7 +98,7 @@ impl ZeroTrustEngine {
         let start_time = Instant::now();
         
         let mut engine = {
-            let mut pool = self.pool.lock().unwrap();
+            let mut pool = self.pool.lock().map_err(|e| AxiomError::InternalError(format!("Mutex poisoned: {e}")))?;
             pool.pop().unwrap_or_else(|| self.base_engine.clone())
         };
         
@@ -111,11 +111,11 @@ impl ZeroTrustEngine {
         engine.set_input(input_val);
         
         let results = engine.eval_query("data.axiom.pdp".to_string(), false)
-            .map_err(|e| AxiomError::InternalError(format!("Query failed: {}", e)))?;
+            .map_err(|e| AxiomError::InternalError(format!("Query failed: {e}")))?;
             
         // Regresamos el engine al pool inmediatamente
         {
-            let mut pool = self.pool.lock().unwrap();
+            let mut pool = self.pool.lock().map_err(|e| AxiomError::InternalError(format!("Mutex poisoned: {e}")))?;
             pool.push(engine);
         }
             
@@ -130,11 +130,11 @@ impl ZeroTrustEngine {
             serde_json::Value::Null
         };
 
-        let allow = pdp_obj.get("allow").and_then(|v| v.as_bool()).unwrap_or(false);
-        let requires_2fa = pdp_obj.get("requires_2fa").and_then(|v| v.as_bool()).unwrap_or(false);
-        let requires_biometric = pdp_obj.get("requires_biometric").and_then(|v| v.as_bool()).unwrap_or(false);
-        let block = pdp_obj.get("block").and_then(|v| v.as_bool()).unwrap_or(false);
-        let alert = pdp_obj.get("alert").and_then(|v| v.as_bool()).unwrap_or(false);
+        let allow = pdp_obj.get("allow").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let requires_2fa = pdp_obj.get("requires_2fa").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let requires_biometric = pdp_obj.get("requires_biometric").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let block = pdp_obj.get("block").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let alert = pdp_obj.get("alert").and_then(serde_json::Value::as_bool).unwrap_or(false);
         
         let decision_type = if block {
             AuditDecision::Deny

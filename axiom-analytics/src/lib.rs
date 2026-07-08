@@ -133,41 +133,4 @@ pub async fn anomaly_score(
     }
 }
 
-/// GET /health — health check simple
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ok", "service": "axiom-analytics" }))
-}
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
-
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter("axiom_analytics=info,warn")
-        .init();
-
-    let ch_url = std::env::var("CLICKHOUSE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8123/".to_string());
-    let bind_addr = std::env::var("ANALYTICS_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:8081".to_string());
-
-    info!("Iniciando axiom-analytics...");
-    info!("ClickHouse: {ch_url}");
-    info!("Bind: {bind_addr}");
-
-    let state = AppState {
-        ch: Arc::new(ClickHouseClient::new(ch_url)),
-    };
-
-    let app = Router::new()
-        .route("/anomaly_score", get(anomaly_score))
-        .route("/health", get(health))
-        .with_state(state);
-
-    let listener = TcpListener::bind(&bind_addr)
-        .await
-        .unwrap_or_else(|e| panic!("No se puede escuchar en {bind_addr}: {e}"));
-
-    info!("axiom-analytics en http://{bind_addr}");
-    axum::serve(listener, app).await.unwrap();
-}
