@@ -32,8 +32,7 @@ pub struct AppStateUnified {
     pub p2p_tx: tokio::sync::mpsc::Sender<NodeCommand>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+pub async fn run_server() -> anyhow::Result<()> {
     // Inicializar logging
     tracing_subscriber::fmt()
         .with_env_filter("info")
@@ -89,6 +88,8 @@ async fn main() -> anyhow::Result<()> {
         anomaly_score: ai_anomaly_score,
         decision_total: ai_decision_total,
         inference_duration_seconds: ai_inference_duration_seconds,
+        pdp_decision_total,
+        pdp_latency_seconds,
     };
 
     let metrics_state = MetricsState {
@@ -169,6 +170,15 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         // API Endpoints
+        .route("/health", get(|| async move {
+            axum::Json(serde_json::json!({
+                "status": "ok",
+                "services": {
+                    "pdp": "ok",
+                    "p2p": "ok"
+                }
+            }))
+        }))
         .route("/v1/evaluate", post(|axum::extract::State(state): axum::extract::State<AppStateUnified>, payload| async move {
             verify_request(axum::extract::State(state.pdp), payload).await
         }))

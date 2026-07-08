@@ -25,6 +25,8 @@ pub struct AiMetrics {
     pub decision_total: Family<Vec<(String, String)>, Counter>,
     /// Duración de inferencia ONNX en segundos (objetivo < 10ms)
     pub inference_duration_seconds: Histogram,
+    pub pdp_decision_total: Family<Vec<(String, String)>, Counter>,
+    pub pdp_latency_seconds: Histogram,
 }
 
 // ─── Estado del servidor ─────────────────────────────────────────────────────
@@ -137,6 +139,7 @@ pub async fn verify_request(
     State(state): State<AppState>,
     Json(payload): Json<ZeroTrustRequest>,
 ) -> Json<Decision> {
+    let t_start = Instant::now();
     let final_decision = match state.engine.evaluate(&payload) {
         Ok(decision) => decision,
         Err(e) => {
@@ -159,6 +162,19 @@ pub async fn verify_request(
     } else {
         "ALLOW"
     };
+    
+    // Usamos pdp_decision_total como lo espera Grafana
+    state.ai_metrics.pdp_decision_total
+        .get_or_create(&vec![
+            ("decision".to_string(), rego_decision.to_string()),
+        ])
+        .inc();
+        
+    // También registramos la latencia del PDP
+    let latency_secs = t_start.elapsed().as_secs_f64();
+    state.ai_metrics.pdp_latency_seconds.observe(latency_secs);
+    
+    // Además podemos mantener el de AI (que usa tags source=rego) si el dashboard lo usa
     state.ai_metrics.decision_total
         .get_or_create(&vec![
             ("source".to_string(), "rego".to_string()),

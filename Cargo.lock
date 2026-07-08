@@ -332,7 +332,7 @@ dependencies = [
  "pqcrypto-kyber",
  "pqcrypto-traits",
  "rand 0.8.6",
- "redis 1.2.4",
+ "redis 0.27.6",
  "regorus",
  "serde",
  "serde_json",
@@ -370,6 +370,7 @@ dependencies = [
  "axiom-ingestor",
  "axiom-p2p",
  "axum",
+ "http-body-util",
  "libp2p",
  "pdp-server",
  "prometheus-client",
@@ -378,6 +379,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -450,6 +452,15 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "backon"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
+dependencies = [
+ "fastrand",
 ]
 
 [[package]]
@@ -3465,8 +3476,10 @@ checksum = "09d8f99a4090c89cc489a94833c901ead69bfbf3877b4867d5482e321ee875bc"
 dependencies = [
  "arc-swap",
  "async-trait",
+ "backon",
  "bytes",
  "combine",
+ "futures",
  "futures-util",
  "itertools 0.13.0",
  "itoa",

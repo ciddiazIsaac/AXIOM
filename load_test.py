@@ -4,16 +4,21 @@ import time
 import argparse
 
 URL = "http://localhost:3000/v1/evaluate"
-PAYLOAD = {
-    "subject": {"did": "did:axiom:test:user1", "clearance_level": 3, "roles": ["user"]},
-    "resource": {"id": "res:test", "classification": "public", "owner": "system"},
-    "context": {"device_id": "dev1", "ip_address": "1.2.3.4", "geolocation": "US", "time_of_day": "12:00:00"},
-    "session": {"session_id": "sess1", "device_trust_score": 90, "mfa_verified": True, "biometric_verified": True}
-}
+import random
+
+def get_payload():
+    user_id = random.randint(1, 1000)
+    return {
+        "session_id": "sess1",
+        "user_did": f"did:axiom:test:user{user_id}",
+        "device": { "trust_score": random.uniform(0.5, 1.0), "id": f"dev{user_id}" },
+        "context": { "distance_km": random.uniform(0.0, 100.0), "time_delta_mins": random.uniform(1.0, 60.0), "anomaly_score": None },
+        "resource": { "name": "res:test", "hash": "abc" }
+    }
 
 async def fetch(session):
     try:
-        async with session.post(URL, json=PAYLOAD) as response:
+        async with session.post(URL, json=get_payload()) as response:
             await response.read()
     except Exception:
         pass  # No abortar el test por errores individuales
@@ -54,7 +59,7 @@ async def run_duration(duration_secs: int, rps: int):
         while time.time() < deadline:
             tick = time.time()
             try:
-                async with session.post(URL, json=PAYLOAD) as resp:
+                async with session.post(URL, json=get_payload()) as resp:
                     await resp.read()
                     count += 1
             except Exception:
