@@ -13,15 +13,23 @@ use tokio::net::TcpListener;
 use tracing::{info, error};
 
 // Imports de otros subsistemas
-use axiom_p2p::node::{ValidatorNode, NodeConfig};
+use axiom_p2p::node::{ValidatorNode, NodeConfig, NodeCommand};
 use libp2p::identity::Keypair;
 use pdp_server::{build_app_state, verify_request, AppState as PdpState, AiMetrics};
 use axiom_analytics::{anomaly_score, AppState as AnalyticsState};
 use axiom_analytics::clickhouse::ClickHouseClient;
 
 #[derive(Clone)]
-struct MetricsState {
-    registry: Arc<Registry>,
+pub struct MetricsState {
+    pub registry: Arc<Registry>,
+}
+
+#[derive(Clone)]
+pub struct AppStateUnified {
+    pub pdp: PdpState,
+    pub analytics: AnalyticsState,
+    pub metrics: MetricsState,
+    pub p2p_tx: tokio::sync::mpsc::Sender<NodeCommand>,
 }
 
 #[tokio::main]
@@ -103,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .expect("P2P_LISTEN_ADDR inválido");
 
-    let (tx_p2p, rx_p2p) = tokio::sync::mpsc::channel(100);
+    let (tx_p2p, rx_p2p) = tokio::sync::mpsc::channel::<NodeCommand>(100);
     tokio::spawn(async move {
         info!("Iniciando Nodo P2P en {}", p2p_listen_addr);
         let local_key = Keypair::generate_ed25519();
@@ -137,7 +145,7 @@ async fn main() -> anyhow::Result<()> {
                 return;
             }
         };
-        node.run(rx_p2p).await;
+        node.run_with_commands(rx_p2p).await;
     });
 
     // 4. Levantar el Servidor HTTP unificado
@@ -151,13 +159,6 @@ async fn main() -> anyhow::Result<()> {
     // Construir el Router principal
     // Fusionaremos los estados o pasaremos lo necesario. Como AppState de cada uno es distinto,
     // es más fácil usar closures o extraerlos de una tupla. Axum State soporta tuplas o structs.
-    #[derive(Clone)]
-    struct AppStateUnified {
-        pdp: PdpState,
-        analytics: AnalyticsState,
-        metrics: MetricsState,
-        p2p_tx: tokio::sync::mpsc::Sender<String>,
-    }
 
     let unified_state = AppStateUnified {
         pdp: pdp_state,
@@ -182,7 +183,11 @@ async fn main() -> anyhow::Result<()> {
             }
 
             if let Some(cred_id) = payload.get("credential_id").and_then(|v| v.as_str()) {
-                let _ = state.p2p_tx.send(format!("revoke {}", cred_id)).await;
+                let _ = state.p2p_tx.send(NodeCommand::Revoke {
+                    credential_id: cred_id.to_string(),
+                    issuer_did: "did:axiom:local".to_string(),
+                    reason: "manual revocation via api".to_string(),
+                }).await;
                 (axum::http::StatusCode::OK, "Revocation injected").into_response()
             } else {
                 (axum::http::StatusCode::BAD_REQUEST, "Missing credential_id").into_response()
