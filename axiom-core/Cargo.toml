@@ -46,9 +46,6 @@ anyhow = "1.0.102"
 tokio = { version = "1.52.3", features = ["sync", "rt", "macros", "fs", "time", "io-util"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 
-# --- Machine Learning / AI ---
-ort = { version = "2.0.0-rc.12", features = ["ndarray"] } # ONNX Runtime (versión estable o rc reciente en v2)
-ndarray = "0.15"
 tracing = "0.1"
 
 [dev-dependencies]
