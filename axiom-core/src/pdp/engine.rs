@@ -36,6 +36,8 @@ pub struct EnvContext {
     pub distance_km: f32,
     /// Diferencia de tiempo en minutos desde el último login
     pub time_delta_mins: f32,
+    /// Score de anomalía previamente calculado (opcional)
+    pub anomaly_score: Option<f32>,
 }
 
 /// Contexto sobre el recurso solicitado
@@ -118,9 +120,29 @@ impl ZeroTrustEngine {
             AuditDecision::Deny
         };
 
-        // risk_score is loosely defined; using trust_score as a basis or calculating an arbitrary risk
-        // For actual calculation, the policy could return it, but here we estimate it based on inputs
-        let risk_score = 1.0 - request.device.trust_score;
+        // Calculamos el riesgo base invertido a partir del trust score
+        let mut risk_score = 1.0 - request.device.trust_score;
+        
+        // Calculamos la geo-velocidad (km/min)
+        let geo_velocity = if request.context.time_delta_mins > 0.0 {
+            request.context.distance_km / request.context.time_delta_mins
+        } else if request.context.distance_km > 0.0 {
+            9999.0 // Viaje instantáneo imposible
+        } else {
+            0.0
+        };
+
+        // Penalización si viaja a más de ~900 km/h (15 km/min)
+        if geo_velocity > 15.0 {
+            risk_score += 0.5;
+        }
+
+        // Incorporar el score de anomalía si está presente
+        if let Some(anomaly) = request.context.anomaly_score {
+            risk_score += anomaly * 0.3;
+        }
+
+        let risk_score = risk_score.clamp(0.0, 1.0);
 
         let latency = start_time.elapsed();
         let latency_ms = latency.as_secs_f64() * 1000.0;
