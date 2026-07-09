@@ -1,8 +1,41 @@
 /* ScoreWidget.module.css */
 
 .widget {
-  grid-column: 1;
-  grid-row: 1;
+  /* Grid position is controlled by DashboardPage's motion.div wrapper */
+}
+
+
+/* ─── Header: título + badge LIVE ──────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.liveBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  border-radius: 40px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--accent-green);
+  text-transform: uppercase;
+}
+
+.liveDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  animation: livePulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
 .ringContainer {
