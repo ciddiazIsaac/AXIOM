@@ -20,13 +20,10 @@
   width: 100%;
   max-width: 440px;
   box-shadow: var(--shadow-card), var(--shadow-glow);
-  animation: slideUp 0.5s ease-out;
+  /* La animación slideUp fue reemplazada por Framer Motion spring */
 }
 
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(24px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
+/* ─── Logo ──────────────────────────────────────────────────── */
 
 .logo {
   text-align: center;
@@ -67,10 +64,142 @@
   margin-top: 4px;
 }
 
+/* ─── Auth title ────────────────────────────────────────────── */
+
 .authTitle {
   font-size: 1rem;
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 1.5px;
   margin-bottom: 1.5rem;
+}
+
+/* ─── Passkey button (biométrico principal) ─────────────────── */
+
+.btnPasskey {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.9rem 1.5rem;
+  background: rgba(6, 182, 212, 0.08);
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  border-radius: var(--radius-sm);
+  color: var(--accent-cyan);
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    border-color var(--transition),
+    box-shadow var(--transition);
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.btnPasskey::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(34,197,94,0.06), rgba(6,182,212,0.06));
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+.btnPasskey:hover:not(:disabled) {
+  background: rgba(6, 182, 212, 0.15);
+  border-color: rgba(6, 182, 212, 0.55);
+  box-shadow: 0 0 20px rgba(6, 182, 212, 0.2), 0 4px 16px rgba(0,0,0,0.3);
+}
+
+.btnPasskey:hover:not(:disabled)::before { opacity: 1; }
+
+.btnPasskey:active:not(:disabled) {
+  background: rgba(6, 182, 212, 0.2);
+}
+
+.btnPasskey:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.biometricIcon {
+  display: flex;
+  align-items: center;
+  font-size: 1.25rem;
+  line-height: 1;
+  filter: drop-shadow(0 0 6px rgba(6, 182, 212, 0.6));
+}
+
+/* ─── Passkey badge de estado ───────────────────────────────── */
+
+.passKeyBadge {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 0.5rem;
+}
+
+/* ─── Botón secundario de registro ─────────────────────────── */
+
+.btnPasskeySecondary {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 1rem;
+  background: transparent;
+  border: 1px dashed rgba(6, 182, 212, 0.25);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+  overflow: hidden;
+}
+
+.btnPasskeySecondary:hover {
+  color: var(--accent-cyan);
+  border-color: rgba(6, 182, 212, 0.4);
+}
+
+/* ─── Separador ─────────────────────────────────────────────── */
+
+.separator {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.25rem 0 1rem;
+}
+
+.separator span:first-child,
+.separator span:last-child {
+  flex: 1;
+  height: 1px;
+  background: var(--border-glass);
+}
+
+.separatorText {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  flex: 0 !important;
+  height: auto !important;
+  background: none !important;
+}
+
+/* ─── Notice de no soporte ──────────────────────────────────── */
+
+.noPasskeyNotice {
+  margin-top: 0.75rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-align: center;
 }
