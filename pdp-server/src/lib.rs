@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use axiom_core::pdp::{Decision, ZeroTrustEngine, ZeroTrustRequest, AuditSpooler};
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{info, warn};
+
 use prometheus_client::metrics::histogram::Histogram;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::counter::Counter;
