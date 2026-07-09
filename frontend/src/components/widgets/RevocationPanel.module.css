@@ -1,0 +1,25 @@
+/* RevocationPanel.module.css */
+
+.panel {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Override input focus for danger color */
+.form :global(.input-group input:focus) {
+  border-color: var(--accent-red);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
+}
+
+.badge {
+  border-radius: var(--radius-sm);
+  min-height: 32px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.78rem;
+}

@@ -1,0 +1,46 @@
+/* ResourceButton.module.css */
+
+.btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  transition:
+    background var(--transition),
+    border-color var(--transition),
+    transform var(--transition);
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: var(--border-accent);
+  transform: translateY(-2px);
+}
+
+.btn:active { transform: translateY(0); }
+
+.icon { font-size: 1.4rem; }
+
+.name {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.class {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+
+.classPublic     { background: rgba(34,197,94,0.12);  color: var(--accent-green); }
+.classRestricted { background: rgba(245,158,11,0.12); color: var(--accent-orange); }
+.classTopSecret  { background: rgba(239,68,68,0.12);  color: var(--accent-red); }
