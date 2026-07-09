@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { revokeCredential } from '../../api/axiom';
 import styles from './RevocationPanel.module.css';
 
 /**
  * RevocationPanel — Panel de revocación P2P via CRDT Automerge + Gossipsub.
+ * Usa AnimatePresence de Framer Motion para animar la aparición/salida del badge de estado.
  *
  * @param {{ did: string }} props
  */
@@ -60,19 +62,32 @@ export default function RevocationPanel({ did }) {
           />
         </div>
 
-        <button
+        <motion.button
           className="btn-danger"
           onClick={handleRevoke}
           disabled={status === 'loading'}
+          whileHover={{ scale: 1.015 }}
+          whileTap={{ scale: 0.985 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 25 }}
         >
           ⚡ {status === 'loading' ? 'Propagando...' : 'Revocar Credencial'}
-        </button>
+        </motion.button>
 
-        {status && (
-          <div className={`${styles.badge} metric-badge ${badgeClass}`}>
-            {message}
-          </div>
-        )}
+        {/* AnimatePresence: el badge entra/sale con spring */}
+        <AnimatePresence mode="wait">
+          {status && (
+            <motion.div
+              key={`revoke-${status}-${message.slice(0, 20)}`}
+              className={`${styles.badge} metric-badge ${badgeClass}`}
+              initial={{ opacity: 0, y: -8, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0,  scale: 1 }}
+              exit={{    opacity: 0, y:  8,  scale: 0.95 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+            >
+              {message}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </section>
   );
