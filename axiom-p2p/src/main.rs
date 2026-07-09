@@ -1,4 +1,3 @@
-use std::error::Error;
 use clap::Parser;
 use libp2p::{identity::Keypair, Multiaddr, PeerId};
 use tokio::io::{stdin, AsyncBufReadExt, BufReader};
@@ -31,7 +30,9 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+    
     let args = Args::parse();
 
     // Cargar variables de entorno desde .env (opcional)
@@ -46,19 +47,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         if let Ok(ed_key) = key.clone().try_into_ed25519() {
             let secret_key = ed_key.secret();
             let secret = secret_key.as_ref();
-            println!("\n============================================================");
-            println!("⚠️  ADVERTENCIA: No se encontró AXIOM_P2P_SECRET_KEY en .env");
-            println!("Se ha generado una identidad EFÍMERA para este arranque.");
-            println!("Para hacerla persistente, añade esto a tu archivo .env:");
-            println!("AXIOM_P2P_SECRET_KEY={}", hex::encode(secret));
-            println!("============================================================\n");
+            tracing::warn!("============================================================");
+            tracing::warn!("⚠️  ADVERTENCIA: No se encontró AXIOM_P2P_SECRET_KEY en .env");
+            tracing::warn!("Se ha generado una identidad EFÍMERA para este arranque.");
+            tracing::warn!("Para hacerla persistente, añade esto a tu archivo .env:");
+            tracing::warn!("AXIOM_P2P_SECRET_KEY={}", hex::encode(secret));
+            tracing::warn!("============================================================");
         }
         key
     };
 
     let local_peer_id = PeerId::from(local_key.public());
-    println!("=== AXIOM Validator Node [{}] ===", args.name);
-    println!("Peer ID: {}", local_peer_id);
+    tracing::info!("=== AXIOM Validator Node [{}] ===", args.name);
+    tracing::info!("Peer ID: {}", local_peer_id);
 
     // 2. Parsear dirección de escucha
     let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", args.port).parse()?;
@@ -78,9 +79,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         if let Some(pid) = peer_id {
             bootstrap_nodes.push((pid, addr));
-            println!("[{}] Usando nodo bootstrap: {}", args.name, pid);
+            tracing::info!("[{}] Usando nodo bootstrap: {}", args.name, pid);
         } else {
-            eprintln!("Advertencia: La dirección bootstrap no contiene un /p2p/<peer_id>. Ignorando.");
+            tracing::warn!("Advertencia: La dirección bootstrap no contiene un /p2p/<peer_id>. Ignorando.");
         }
     }
 
@@ -111,14 +112,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             (auto_revoke_spec, 5u64)
         };
 
-        println!("[{}] Auto-revoke programado: '{}' en {}s", name, cred_id, delay_secs);
+        tracing::info!("[{}] Auto-revoke programado: '{}' en {}s", name, cred_id, delay_secs);
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(delay_secs)).await;
-            println!("[{}] Ejecutando auto-revoke de '{}'...", name, cred_id);
+            tracing::info!("[{}] Ejecutando auto-revoke de '{}'...", name, cred_id);
             let cmd = format!("revoke {}", cred_id);
             if tx_auto.send(cmd).await.is_err() {
-                eprintln!("[{}] Error: canal de comandos cerrado", name);
+                tracing::error!("[{}] Error: canal de comandos cerrado", name);
             }
         });
     }
@@ -139,12 +140,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    println!("\nComandos disponibles:");
-    println!("  revoke <id>   - Revocar la credencial con el ID dado");
-    println!("  status        - Ver el estado del CRDT");
-    println!("------------------------------------------------------\n");
+    tracing::info!("\nComandos disponibles:");
+    tracing::info!("  revoke <id>   - Revocar la credencial con el ID dado");
+    tracing::info!("  status        - Ver el estado del CRDT");
+    tracing::info!("------------------------------------------------------\n");
 
     // 8. Arrancar el Swarm en bucle eterno
+    tracing::info!("Iniciando nodo validador...");
     node.run(rx).await;
 
     Ok(())
