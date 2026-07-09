@@ -4,7 +4,7 @@ use libp2p::{identity::Keypair, Multiaddr, PeerId};
 use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 use std::time::Duration;
-
+use std::env;
 use axiom_p2p::node::{NodeConfig, ValidatorNode};
 
 #[derive(Parser, Debug)]
@@ -34,8 +34,28 @@ struct Args {
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    // 1. Generar la identidad del nodo (clave ed25519)
-    let local_key = Keypair::generate_ed25519();
+    // Cargar variables de entorno desde .env (opcional)
+    dotenvy::dotenv().ok();
+
+    // 1. Generar o cargar la identidad del nodo (clave ed25519)
+    let local_key = if let Ok(hex_key) = env::var("AXIOM_P2P_SECRET_KEY") {
+        let mut bytes = hex::decode(hex_key).expect("AXIOM_P2P_SECRET_KEY debe ser un string hexadecimal válido de 64 caracteres");
+        libp2p::identity::Keypair::ed25519_from_bytes(&mut bytes).expect("Clave ed25519 inválida en AXIOM_P2P_SECRET_KEY")
+    } else {
+        let key = Keypair::generate_ed25519();
+        if let Ok(ed_key) = key.clone().try_into_ed25519() {
+            let secret_key = ed_key.secret();
+            let secret = secret_key.as_ref();
+            println!("\n============================================================");
+            println!("⚠️  ADVERTENCIA: No se encontró AXIOM_P2P_SECRET_KEY en .env");
+            println!("Se ha generado una identidad EFÍMERA para este arranque.");
+            println!("Para hacerla persistente, añade esto a tu archivo .env:");
+            println!("AXIOM_P2P_SECRET_KEY={}", hex::encode(secret));
+            println!("============================================================\n");
+        }
+        key
+    };
+
     let local_peer_id = PeerId::from(local_key.public());
     println!("=== AXIOM Validator Node [{}] ===", args.name);
     println!("Peer ID: {}", local_peer_id);
