@@ -70,9 +70,14 @@ async fn test_two_nodes_revocation_propagation() {
     println!("  E2E TEST: Propagación de Revocación");
     println!("========================================\n");
 
-    // 1. Arrancar dos nodos, B marca explícitamente a A como dial_addr para evitar depender de mDNS
+    // 1. Arrancar Nodo A
     let addr_a: Multiaddr = "/ip4/127.0.0.1/tcp/19100".parse().unwrap();
     let (tx_a, peer_a) = spawn_node_bg(19100, None);
+
+    // Dar tiempo a Nodo A para que empiece a escuchar en el puerto TCP
+    sleep(Duration::from_secs(2)).await;
+
+    // Arrancar Nodo B, marcando explícitamente a A como dial_addr
     let (tx_b, peer_b) = spawn_node_bg(19101, Some(addr_a));
 
     println!("[Test] Nodo A: {}", peer_a);
@@ -146,8 +151,12 @@ async fn test_multiple_revocations_converge() {
 
     let addr_a: Multiaddr = "/ip4/127.0.0.1/tcp/19200".parse().unwrap();
     let (tx_a, _) = spawn_node_bg(19200, None);
+
+    // Dar tiempo a Nodo A para que empiece a escuchar en el puerto TCP
+    sleep(Duration::from_secs(2)).await;
+
     let (tx_b, _) = spawn_node_bg(19201, Some(addr_a.clone()));
-    let (tx_c, _) = spawn_node_bg(19202, Some(addr_a));
+    let (_tx_c, _) = spawn_node_bg(19202, Some(addr_a));
 
     // Esperar descubrimiento mDNS
     sleep(Duration::from_secs(10)).await;

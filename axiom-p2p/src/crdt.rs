@@ -434,4 +434,50 @@ mod tests {
 
         let _ = std::fs::remove_file(db_path); // Limpiar después del test
     }
+
+    /// Test 8: Resolución de conflictos Last-Writer-Wins (LWW)
+    /// Dos nodos revocan la misma credencial simultáneamente con motivos diferentes.
+    /// Al fusionarse, Automerge usa LWW para decidir el valor final.
+    #[tokio::test]
+    async fn test_concurrent_conflict_resolution() {
+        let mut node1 = RevocationCrdt::new();
+        let mut node2 = RevocationCrdt::new();
+
+        // Ambos parten del mismo estado vacío
+        let _ = node1.save_incremental();
+        let _ = node2.save_incremental();
+
+        // Nodo 1 revoca por "motivo A"
+        let mut rev1 = make_revocation("cred-conflict");
+        rev1.reason = "compromised by malware".to_string();
+        node1.add(&rev1).await;
+
+        // Nodo 2 revoca la misma credencial por "motivo B"
+        let mut rev2 = make_revocation("cred-conflict");
+        rev2.reason = "employee terminated".to_string();
+        node2.add(&rev2).await;
+
+        // Fusionar ambos estados
+        let state1 = node1.save_full();
+        let state2 = node2.save_full();
+
+        node1.merge_full(&state2).await.unwrap();
+        node2.merge_full(&state1).await.unwrap();
+
+        // Ambos deben converger al mismo valor (LWW basado en el actor_id de Automerge)
+        let all1 = node1.all_revocations();
+        let all2 = node2.all_revocations();
+
+        assert_eq!(all1.len(), 1);
+        assert_eq!(all2.len(), 1);
+        
+        let reason1 = &all1[0].reason;
+        let reason2 = &all2[0].reason;
+
+        assert_eq!(reason1, reason2, "La resolución de conflictos debe converger al mismo motivo");
+        assert!(
+            reason1 == "compromised by malware" || reason1 == "employee terminated",
+            "El motivo resultante debe ser uno de los dos conflictivos"
+        );
+    }
 }
