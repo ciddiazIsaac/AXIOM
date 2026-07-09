@@ -18,11 +18,9 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::Json,
-    routing::get,
-    Router,
 };
 use serde::{Deserialize, Serialize};
-use tokio::net::TcpListener;
+
 use tracing::{error, info};
 
 use crate::clickhouse::ClickHouseClient;
