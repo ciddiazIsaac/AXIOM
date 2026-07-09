@@ -30,3 +30,18 @@ pub enum GossipPayload {
     /// con `RevocationCrdt::merge_full()`.
     SyncResponse(Vec<u8>),
 }
+
+/// Envoltura criptográfica para garantizar confidencialidad "Zero Trust".
+/// Contiene el payload real (`GossipPayload`) firmado por el emisor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedPayload {
+    /// PeerId del emisor como string
+    pub sender_peer_id: String,
+    /// Clave pública del emisor (necesaria para validar si no lo conocemos)
+    pub public_key_bytes: Vec<u8>,
+    /// Firma digital ed25519 sobre los `payload_bytes`
+    pub signature: Vec<u8>,
+    /// El `GossipPayload` original, serializado a bytes
+    pub payload_bytes: Vec<u8>,
+}
+
