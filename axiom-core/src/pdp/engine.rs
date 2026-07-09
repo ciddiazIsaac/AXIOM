@@ -209,3 +209,79 @@ impl ZeroTrustEngine {
     }
 
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REGO_POLICY: &str = include_str!("../../policies/zero_trust.rego");
+
+    fn make_base_request() -> ZeroTrustRequest {
+        ZeroTrustRequest {
+            session_id: "test_sess".to_string(),
+            user_did: "did:axiom:test".to_string(),
+            device: DeviceContext {
+                trust_score: 0.9,
+                id: "dev-1".to_string(),
+            },
+            context: EnvContext {
+                distance_km: 10.0,
+                time_delta_mins: 60.0,
+                anomaly_score: None,
+            },
+            resource: ResourceContext {
+                name: "Document".to_string(),
+                hash: "hash".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn test_default_allow() {
+        let engine = ZeroTrustEngine::new(REGO_POLICY).unwrap();
+        let req = make_base_request();
+        let dec = engine.evaluate(&req).unwrap();
+        
+        assert!(dec.allow);
+        assert!(!dec.requires_2fa);
+        assert!(!dec.requires_biometric);
+        assert!(!dec.block);
+        assert!(!dec.alert);
+    }
+
+    #[test]
+    fn test_low_trust_score_requires_2fa() {
+        let engine = ZeroTrustEngine::new(REGO_POLICY).unwrap();
+        let mut req = make_base_request();
+        req.device.trust_score = 0.5; // < 0.7 triggers Rule 1
+        let dec = engine.evaluate(&req).unwrap();
+        
+        assert!(dec.allow);
+        assert!(dec.requires_2fa);
+        assert!(!dec.block);
+    }
+
+    #[test]
+    fn test_impossible_travel_blocks_and_alerts() {
+        let engine = ZeroTrustEngine::new(REGO_POLICY).unwrap();
+        let mut req = make_base_request();
+        req.context.distance_km = 1500.0; // > 1000
+        req.context.time_delta_mins = 5.0; // < 10
+        let dec = engine.evaluate(&req).unwrap();
+        
+        assert!(!dec.allow); // Block overrides allow in the policy
+        assert!(dec.block);
+        assert!(dec.alert);
+    }
+
+    #[test]
+    fn test_admin_resource_requires_biometric() {
+        let engine = ZeroTrustEngine::new(REGO_POLICY).unwrap();
+        let mut req = make_base_request();
+        req.resource.name = "Admin".to_string(); // triggers Rule 3
+        let dec = engine.evaluate(&req).unwrap();
+        
+        assert!(dec.allow);
+        assert!(dec.requires_biometric);
+    }
+}

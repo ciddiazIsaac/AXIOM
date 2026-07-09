@@ -42,9 +42,11 @@ allow if {
     fn test_normal_access() {
         let engine = get_engine();
         let req = ZeroTrustRequest {
+            session_id: "test-session".into(),
+            user_did: "did:axiom:test".into(),
             device: DeviceContext { trust_score: 0.9, id: "dev-1".into() },
-            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0 },
-            resource: ResourceContext { name: "Dashboard".into() },
+            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0, anomaly_score: None },
+            resource: ResourceContext { name: "Dashboard".into(), hash: "test-hash".into() },
         };
         
         let decision = engine.evaluate(&req).unwrap();
@@ -59,9 +61,11 @@ allow if {
     fn test_low_trust_score_requires_2fa() {
         let engine = get_engine();
         let req = ZeroTrustRequest {
+            session_id: "test-session".into(),
+            user_did: "did:axiom:test".into(),
             device: DeviceContext { trust_score: 0.5, id: "dev-1".into() },
-            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0 },
-            resource: ResourceContext { name: "Dashboard".into() },
+            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0, anomaly_score: None },
+            resource: ResourceContext { name: "Dashboard".into(), hash: "test-hash".into() },
         };
         
         let decision = engine.evaluate(&req).unwrap();
@@ -75,9 +79,11 @@ allow if {
     fn test_impossible_travel_blocks_and_alerts() {
         let engine = get_engine();
         let req = ZeroTrustRequest {
+            session_id: "test-session".into(),
+            user_did: "did:axiom:test".into(),
             device: DeviceContext { trust_score: 0.9, id: "dev-1".into() },
-            context: EnvContext { distance_km: 5000.0, time_delta_mins: 5.0 }, // 5000km in 5 minutes
-            resource: ResourceContext { name: "Dashboard".into() },
+            context: EnvContext { distance_km: 5000.0, time_delta_mins: 5.0, anomaly_score: None }, // 5000km in 5 minutes
+            resource: ResourceContext { name: "Dashboard".into(), hash: "test-hash".into() },
         };
         
         let decision = engine.evaluate(&req).unwrap();
@@ -90,9 +96,11 @@ allow if {
     fn test_admin_requires_biometric() {
         let engine = get_engine();
         let req = ZeroTrustRequest {
+            session_id: "test-session".into(),
+            user_did: "did:axiom:test".into(),
             device: DeviceContext { trust_score: 0.9, id: "dev-1".into() },
-            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0 },
-            resource: ResourceContext { name: "Admin".into() },
+            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0, anomaly_score: None },
+            resource: ResourceContext { name: "Admin".into(), hash: "test-hash".into() },
         };
         
         let decision = engine.evaluate(&req).unwrap();
@@ -105,9 +113,11 @@ allow if {
     fn test_speed() {
         let engine = get_engine();
         let req = ZeroTrustRequest {
+            session_id: "test-session".into(),
+            user_did: "did:axiom:test".into(),
             device: DeviceContext { trust_score: 0.9, id: "dev-1".into() },
-            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0 },
-            resource: ResourceContext { name: "Dashboard".into() },
+            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0, anomaly_score: None },
+            resource: ResourceContext { name: "Dashboard".into(), hash: "test-hash".into() },
         };
         
         let start = std::time::Instant::now();
