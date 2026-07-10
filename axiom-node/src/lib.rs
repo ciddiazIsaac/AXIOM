@@ -188,52 +188,68 @@ pub async fn run_server() -> anyhow::Result<()> {
 
     let app = Router::new()
         // API Endpoints
-        .route("/health", get(|axum::extract::State(state): axum::extract::State<AppStateUnified>| async move {
-            let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379/".to_string());
-            
-            let is_sentinel = redis_url.starts_with("redis+sentinel://");
-            let mut redis_status = "error";
-            
-            if is_sentinel {
-                let sentinel_url = redis_url.replace("redis+sentinel://", "redis://");
-                let parts: Vec<&str> = sentinel_url.split('/').collect();
-                let sentinel_node = parts[0];
-                let master_name = if parts.len() > 1 && !parts[1].is_empty() { parts[1] } else { "mymaster" };
+        .route(
+            "/health",
+            get(
+                |axum::extract::State(state): axum::extract::State<AppStateUnified>| async move {
+                    let redis_url = std::env::var("REDIS_URL")
+                        .unwrap_or_else(|_| "redis://localhost:6379/".to_string());
 
-                if let Ok(mut sentinel_client) = redis::sentinel::SentinelClient::build(
-                    vec![format!("redis://{sentinel_node}")],
-                    master_name.to_string(),
-                    None,
-                    redis::sentinel::SentinelServerType::Master,
-                ) {
-                    if sentinel_client.get_async_connection().await.is_ok() {
-                        redis_status = "ok";
-                    }
-                }
-            } else {
-                if let Ok(client) = redis::Client::open(redis_url.as_str()) {
-                    if client.get_multiplexed_async_connection().await.is_ok() {
-                        redis_status = "ok";
-                    }
-                }
-            }
+                    let is_sentinel = redis_url.starts_with("redis+sentinel://");
+                    let mut redis_status = "error";
 
-            let ch_url = format!("{}/ping", state.pdp.clickhouse_url);
-            let ch_res = state.pdp.http_client.get(&ch_url).send().await;
-            let ch_status = if ch_res.is_ok() { "ok" } else { "error" };
-            
-            let overall_status = if redis_status == "ok" && ch_status == "ok" { "ok" } else { "error" };
-            let status_code = if overall_status == "ok" { axum::http::StatusCode::OK } else { axum::http::StatusCode::SERVICE_UNAVAILABLE };
-            
-            (status_code, axum::Json(serde_json::json!({
-                "status": overall_status,
-                "services": {
-                    "redis": redis_status,
-                    "clickhouse": ch_status,
-                    "p2p": "ok"
-                }
-            })))
-        }))
+                    if is_sentinel {
+                        let sentinel_url = redis_url.replace("redis+sentinel://", "redis://");
+                        let parts: Vec<&str> = sentinel_url.split('/').collect();
+                        let sentinel_node = parts[0];
+                        let master_name = if parts.len() > 1 && !parts[1].is_empty() {
+                            parts[1]
+                        } else {
+                            "mymaster"
+                        };
+
+                        if let Ok(mut sentinel_client) = redis::sentinel::SentinelClient::build(
+                            vec![format!("redis://{sentinel_node}")],
+                            master_name.to_string(),
+                            None,
+                            redis::sentinel::SentinelServerType::Master,
+                        ) {
+                            if sentinel_client.get_async_connection().await.is_ok() {
+                                redis_status = "ok";
+                            }
+                        }
+                    } else if let Ok(client) = redis::Client::open(redis_url.as_str()) {
+                        if client.get_multiplexed_async_connection().await.is_ok() {
+                            redis_status = "ok";
+                        }
+                    }
+
+                    let ch_url = format!("{}/ping", state.pdp.clickhouse_url);
+                    let ch_res = state.pdp.http_client.get(&ch_url).send().await;
+                    let ch_status = if ch_res.is_ok() { "ok" } else { "error" };
+
+                    let overall_status =
+                        if redis_status == "ok" && ch_status == "ok" { "ok" } else { "error" };
+                    let status_code = if overall_status == "ok" {
+                        axum::http::StatusCode::OK
+                    } else {
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    };
+
+                    (
+                        status_code,
+                        axum::Json(serde_json::json!({
+                            "status": overall_status,
+                            "services": {
+                                "redis": redis_status,
+                                "clickhouse": ch_status,
+                                "p2p": "ok"
+                            }
+                        })),
+                    )
+                },
+            ),
+        )
         .route("/v1/evaluate", post(|axum::extract::State(state): axum::extract::State<AppStateUnified>, payload| async move {
             verify_request(axum::extract::State(state.pdp), payload).await
         }))
