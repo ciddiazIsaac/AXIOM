@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use axiom_core::pdp::{Decision, DeviceContext, EnvContext, ResourceContext, ZeroTrustEngine, ZeroTrustRequest};
+    use axiom_core::pdp::{DeviceContext, EnvContext, ResourceContext, ZeroTrustEngine, ZeroTrustRequest};
 
     const REGO_POLICY: &str = r#"
 package axiom.pdp

@@ -22,6 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 redis = { version = "0.27", features = ["tokio-comp"] }
 libp2p = { version = "0.54", features = ["tokio", "tcp", "noise", "yamux", "ed25519"] }
+hex = "0.4.3"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

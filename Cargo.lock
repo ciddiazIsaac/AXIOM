@@ -368,6 +368,7 @@ dependencies = [
  "axiom-ingestor",
  "axiom-p2p",
  "axum",
+ "hex",
  "http-body-util",
  "libp2p",
  "pdp-server",
