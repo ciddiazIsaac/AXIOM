@@ -8,16 +8,18 @@
 //!
 //! No usa bootstrap externo — los nodos se descubren por mDNS en localhost.
 
-use axiom_p2p::node::{NodeConfig, NodeCommand};
+use axiom_p2p::node::{NodeCommand, NodeConfig};
 use axiom_p2p::ValidatorNode;
 use libp2p::identity::Keypair;
 use libp2p::Multiaddr;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{sleep, Duration, timeout};
-
+use tokio::time::{sleep, timeout, Duration};
 
 /// Helper mejorado: crea y arranca un nodo, devuelve solo el sender + peer_id.
-fn spawn_node_bg(port: u16, dial: Option<Multiaddr>) -> (mpsc::Sender<NodeCommand>, libp2p::PeerId) {
+fn spawn_node_bg(
+    port: u16,
+    dial: Option<Multiaddr>,
+) -> (mpsc::Sender<NodeCommand>, libp2p::PeerId) {
     let key = Keypair::generate_ed25519();
     let peer_id = libp2p::PeerId::from(key.public());
     let listen_addr: Multiaddr = format!("/ip4/127.0.0.1/tcp/{}", port).parse().unwrap();
@@ -45,7 +47,9 @@ fn spawn_node_bg(port: u16, dial: Option<Multiaddr>) -> (mpsc::Sender<NodeComman
 /// Helper: consulta el count del CRDT de un nodo vía su canal de comandos.
 async fn query_count(tx: &mpsc::Sender<NodeCommand>) -> usize {
     let (resp_tx, resp_rx) = oneshot::channel();
-    tx.send(NodeCommand::QueryCount { response: resp_tx }).await.unwrap();
+    tx.send(NodeCommand::QueryCount { response: resp_tx })
+        .await
+        .unwrap();
     resp_rx.await.unwrap()
 }
 
@@ -55,7 +59,9 @@ async fn query_is_revoked(tx: &mpsc::Sender<NodeCommand>, cred_id: &str) -> bool
     tx.send(NodeCommand::IsRevoked {
         credential_id: cred_id.to_string(),
         response: resp_tx,
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
     resp_rx.await.unwrap()
 }
 
@@ -90,7 +96,10 @@ async fn test_two_nodes_revocation_propagation() {
     // 3. Verificar que ambos nodos empiezan vacíos
     let count_a = query_count(&tx_a).await;
     let count_b = query_count(&tx_b).await;
-    println!("[Test] Estado inicial — Nodo A: {} revocaciones, Nodo B: {} revocaciones", count_a, count_b);
+    println!(
+        "[Test] Estado inicial — Nodo A: {} revocaciones, Nodo B: {} revocaciones",
+        count_a, count_b
+    );
     assert_eq!(count_a, 0, "Nodo A debería empezar sin revocaciones");
     assert_eq!(count_b, 0, "Nodo B debería empezar sin revocaciones");
 
@@ -101,12 +110,17 @@ async fn test_two_nodes_revocation_propagation() {
         credential_id: cred_id.to_string(),
         issuer_did: "did:axiom:e2e-test-issuer".to_string(),
         reason: "e2e test revocation".to_string(),
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
 
     // 5. Verificar que Nodo A tiene la revocación localmente
     sleep(Duration::from_millis(500)).await;
     let is_revoked_a = query_is_revoked(&tx_a, cred_id).await;
-    assert!(is_revoked_a, "Nodo A debería tener la revocación localmente");
+    assert!(
+        is_revoked_a,
+        "Nodo A debería tener la revocación localmente"
+    );
     println!("[Test] ✓ Nodo A tiene la revocación localmente");
 
     // 6. Esperar a que Gossipsub propague la revocación a Nodo B
@@ -119,7 +133,8 @@ async fn test_two_nodes_revocation_propagation() {
             }
             sleep(Duration::from_secs(2)).await;
         }
-    }).await;
+    })
+    .await;
 
     match propagated {
         Ok(true) => {
@@ -168,7 +183,9 @@ async fn test_multiple_revocations_converge() {
             credential_id: cred,
             issuer_did: "did:axiom:multi-test".to_string(),
             reason: "batch test".to_string(),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         sleep(Duration::from_millis(200)).await;
     }
 
@@ -181,7 +198,8 @@ async fn test_multiple_revocations_converge() {
             }
             sleep(Duration::from_secs(2)).await;
         }
-    }).await;
+    })
+    .await;
 
     assert!(
         all_propagated.is_ok(),

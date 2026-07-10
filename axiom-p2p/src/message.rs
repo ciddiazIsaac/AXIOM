@@ -44,4 +44,3 @@ pub struct SignedPayload {
     /// El `GossipPayload` original, serializado a bytes
     pub payload_bytes: Vec<u8>,
 }
-

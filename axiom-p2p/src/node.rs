@@ -1,17 +1,17 @@
-use libp2p::{
-    gossipsub, identify, kad, mdns, noise, tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
-    identity::Keypair, swarm::SwarmEvent,
-};
 use futures::StreamExt;
+use libp2p::{
+    gossipsub, identify, identity::Keypair, kad, mdns, noise, swarm::SwarmEvent, tcp, yamux,
+    Multiaddr, PeerId, Swarm, SwarmBuilder,
+};
 use std::time::Duration;
-use tokio::time;
 use tokio::select;
 use tokio::sync::oneshot;
+use tokio::time;
 
 use crate::behaviour::{ValidatorBehaviour, ValidatorBehaviourEvent};
 use crate::crdt::RevocationCrdt;
-use crate::message::{GossipPayload, RevocationMessage, SignedPayload};
 use crate::error::NodeError;
+use crate::message::{GossipPayload, RevocationMessage, SignedPayload};
 
 /// Comandos programáticos para controlar el nodo.
 ///
@@ -25,9 +25,7 @@ pub enum NodeCommand {
         reason: String,
     },
     /// Consulta cuántas revocaciones tiene el CRDT.
-    QueryCount {
-        response: oneshot::Sender<usize>,
-    },
+    QueryCount { response: oneshot::Sender<usize> },
     /// Consulta si una credencial está revocada.
     IsRevoked {
         credential_id: String,
@@ -65,7 +63,8 @@ impl ValidatorNode {
                 tcp::Config::default(),
                 noise::Config::new,
                 yamux::Config::default,
-            ).map_err(|e| NodeError::P2pError(e.to_string()))?
+            )
+            .map_err(|e| NodeError::P2pError(e.to_string()))?
             .with_behaviour(|key| ValidatorBehaviour::new(key).unwrap())
             .map_err(|e| NodeError::P2pError(e.to_string()))?
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
@@ -90,7 +89,9 @@ impl ValidatorNode {
         let _ = node.crdt.save_incremental();
 
         // Escuchar en la dirección configurada
-        node.swarm.listen_on(config.listen_addr).map_err(|e| NodeError::P2pError(e.to_string()))?;
+        node.swarm
+            .listen_on(config.listen_addr)
+            .map_err(|e| NodeError::P2pError(e.to_string()))?;
 
         Ok(node)
     }
@@ -107,11 +108,13 @@ impl ValidatorNode {
                 if cmd.starts_with("revoke ") {
                     let parts: Vec<&str> = cmd.split_whitespace().collect();
                     if parts.len() == 2 {
-                        let _ = cmd_tx.send(NodeCommand::Revoke {
-                            credential_id: parts[1].to_string(),
-                            issuer_did: "did:axiom:local".to_string(),
-                            reason: "manual revocation".to_string(),
-                        }).await;
+                        let _ = cmd_tx
+                            .send(NodeCommand::Revoke {
+                                credential_id: parts[1].to_string(),
+                                issuer_did: "did:axiom:local".to_string(),
+                                reason: "manual revocation".to_string(),
+                            })
+                            .await;
                     } else {
                         tracing::warn!("Uso: revoke <credential_id>");
                     }
@@ -132,7 +135,10 @@ impl ValidatorNode {
 
     /// Ejecuta el nodo con comandos programáticos tipados.
     /// Usado directamente por tests de integración.
-    pub async fn run_with_commands(mut self, mut command_rx: tokio::sync::mpsc::Receiver<NodeCommand>) {
+    pub async fn run_with_commands(
+        mut self,
+        mut command_rx: tokio::sync::mpsc::Receiver<NodeCommand>,
+    ) {
         // Temporizador para comprobar la conexión con otros pares cada 30 segundos
         let mut no_peer_interval = time::interval(Duration::from_secs(30));
         no_peer_interval.tick().await; // Consumir el primer tick inmediato
@@ -155,7 +161,7 @@ impl ValidatorNode {
                         tracing::warn!("No se descubrieron pares en los últimos 30s. Reintentando bootstrap...");
                         self.attempt_bootstrap();
                     } else {
-                        // Reiniciamos el flag para el siguiente intervalo si es que queremos 
+                        // Reiniciamos el flag para el siguiente intervalo si es que queremos
                         // seguir verificando la conectividad continuamente.
                         discovered_any = false;
                     }
@@ -167,7 +173,7 @@ impl ValidatorNode {
                         SwarmEvent::NewListenAddr { address, .. } => {
                             tracing::info!("Escuchando en {:?}", address);
                         }
-                        
+
                         // Eventos mDNS (Descubrimiento Local)
                         SwarmEvent::Behaviour(ValidatorBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                             for (peer_id, multiaddr) in list {
@@ -220,14 +226,14 @@ impl ValidatorNode {
                                 _ => {}
                             }
                         }
-                        
+
                         // ═══════════════════════════════════════════════════
                         // Eventos Gossipsub — Integración con Automerge CRDT
                         // ═══════════════════════════════════════════════════
                         SwarmEvent::Behaviour(ValidatorBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
                             self.handle_gossipsub_message(&message.data).await;
                         }
-                        
+
                         _ => {}
                     }
                 }
@@ -238,7 +244,11 @@ impl ValidatorNode {
     /// Procesa un `NodeCommand` tipado.
     async fn handle_command(&mut self, cmd: NodeCommand) {
         match cmd {
-            NodeCommand::Revoke { credential_id, issuer_did, reason } => {
+            NodeCommand::Revoke {
+                credential_id,
+                issuer_did,
+                reason,
+            } => {
                 let revocation = RevocationMessage {
                     credential_id,
                     issuer_did,
@@ -255,7 +265,10 @@ impl ValidatorNode {
             NodeCommand::QueryCount { response } => {
                 let _ = response.send(self.crdt.count());
             }
-            NodeCommand::IsRevoked { credential_id, response } => {
+            NodeCommand::IsRevoked {
+                credential_id,
+                response,
+            } => {
                 let _ = response.send(self.crdt.is_revoked(&credential_id));
             }
             NodeCommand::GetListenAddr { response } => {
@@ -278,32 +291,50 @@ impl ValidatorNode {
         };
 
         // Reconstruir la PublicKey desde los bytes provistos
-        let pub_key = match libp2p::identity::PublicKey::try_decode_protobuf(&signed.public_key_bytes) {
-            Ok(k) => k,
-            Err(e) => {
-                tracing::warn!("Clave pública inválida recibida de {}: {:?}", signed.sender_peer_id, e);
-                return;
-            }
-        };
+        let pub_key =
+            match libp2p::identity::PublicKey::try_decode_protobuf(&signed.public_key_bytes) {
+                Ok(k) => k,
+                Err(e) => {
+                    tracing::warn!(
+                        "Clave pública inválida recibida de {}: {:?}",
+                        signed.sender_peer_id,
+                        e
+                    );
+                    return;
+                }
+            };
 
         // Verificar si la clave pública coincide con el PeerId declarado
         if PeerId::from(pub_key.clone()).to_string() != signed.sender_peer_id {
-            tracing::error!("¡ALERTA ZERO TRUST! PeerId no coincide con la clave pública de: {}", signed.sender_peer_id);
+            tracing::error!(
+                "¡ALERTA ZERO TRUST! PeerId no coincide con la clave pública de: {}",
+                signed.sender_peer_id
+            );
             return;
         }
 
         // Verificar la firma criptográfica sobre el payload real
         if !pub_key.verify(&signed.payload_bytes, &signed.signature) {
-            tracing::error!("¡ALERTA ZERO TRUST! Firma criptográfica inválida rechazada de: {}", signed.sender_peer_id);
+            tracing::error!(
+                "¡ALERTA ZERO TRUST! Firma criptográfica inválida rechazada de: {}",
+                signed.sender_peer_id
+            );
             return;
         }
 
         match serde_json::from_slice::<GossipPayload>(&signed.payload_bytes) {
             Ok(GossipPayload::RevocationChange(change_bytes)) => {
-                tracing::info!("Cambio incremental verificado de {} ({} bytes)", signed.sender_peer_id, change_bytes.len());
+                tracing::info!(
+                    "Cambio incremental verificado de {} ({} bytes)",
+                    signed.sender_peer_id,
+                    change_bytes.len()
+                );
                 match self.crdt.apply_incremental(&change_bytes).await {
                     Ok(()) => {
-                        tracing::info!("CRDT actualizado. Total revocaciones: {}", self.crdt.count());
+                        tracing::info!(
+                            "CRDT actualizado. Total revocaciones: {}",
+                            self.crdt.count()
+                        );
                     }
                     Err(e) => {
                         tracing::error!("Error al aplicar cambio incremental: {:?}", e);
@@ -311,7 +342,10 @@ impl ValidatorNode {
                 }
             }
             Ok(GossipPayload::SyncRequest) => {
-                tracing::info!("SyncRequest recibido de {}. Enviando estado completo...", signed.sender_peer_id);
+                tracing::info!(
+                    "SyncRequest recibido de {}. Enviando estado completo...",
+                    signed.sender_peer_id
+                );
                 let full_state = self.crdt.save_full();
                 let response = GossipPayload::SyncResponse(full_state);
                 if let Err(e) = self.publish_payload(&response) {
@@ -319,11 +353,18 @@ impl ValidatorNode {
                 }
             }
             Ok(GossipPayload::SyncResponse(full_bytes)) => {
-                tracing::info!("SyncResponse verificado de {} ({} bytes). Fusionando...", signed.sender_peer_id, full_bytes.len());
+                tracing::info!(
+                    "SyncResponse verificado de {} ({} bytes). Fusionando...",
+                    signed.sender_peer_id,
+                    full_bytes.len()
+                );
                 match self.crdt.merge_full(&full_bytes).await {
                     Ok(()) => {
                         self.needs_sync = false;
-                        tracing::info!("Sync completo exitoso. Total revocaciones: {}", self.crdt.count());
+                        tracing::info!(
+                            "Sync completo exitoso. Total revocaciones: {}",
+                            self.crdt.count()
+                        );
                     }
                     Err(e) => {
                         tracing::error!("Error al fusionar estado completo: {:?}", e);
@@ -341,14 +382,23 @@ impl ValidatorNode {
     /// 1. Inserta la revocación en el documento Automerge local
     /// 2. Genera el delta incremental
     /// 3. Lo envuelve en `GossipPayload::RevocationChange` y lo publica
-    pub async fn publish_revocation(&mut self, revocation: &RevocationMessage) -> Result<(), NodeError> {
+    pub async fn publish_revocation(
+        &mut self,
+        revocation: &RevocationMessage,
+    ) -> Result<(), NodeError> {
         // Mutar el documento Automerge local
         let is_new = self.crdt.add(revocation).await?;
 
         if is_new {
-            tracing::info!("Credencial {} revocada localmente. Propagando delta...", revocation.credential_id);
+            tracing::info!(
+                "Credencial {} revocada localmente. Propagando delta...",
+                revocation.credential_id
+            );
         } else {
-            tracing::info!("Credencial {} ya estaba revocada. Re-propagando por consistencia.", revocation.credential_id);
+            tracing::info!(
+                "Credencial {} ya estaba revocada. Re-propagando por consistencia.",
+                revocation.credential_id
+            );
         }
 
         // Obtener el delta incremental (solo los cambios nuevos)
@@ -379,13 +429,16 @@ impl ValidatorNode {
     /// Publica un `GossipPayload` firmado criptográficamente en el topic.
     fn publish_payload(&mut self, payload: &GossipPayload) -> Result<(), NodeError> {
         let topic = gossipsub::IdentTopic::new("axiom/revocations/1.0.0");
-        
+
         // Serializar el payload interno
         let payload_bytes = serde_json::to_vec(payload)?;
-        
+
         // Firmarlo con nuestra clave privada
-        let signature = self.local_key.sign(&payload_bytes).map_err(|e| NodeError::Internal(format!("Error firmando: {:?}", e)))?;
-        
+        let signature = self
+            .local_key
+            .sign(&payload_bytes)
+            .map_err(|e| NodeError::Internal(format!("Error firmando: {:?}", e)))?;
+
         // Envolver en SignedPayload
         let signed = SignedPayload {
             sender_peer_id: self.swarm.local_peer_id().to_string(),
@@ -396,7 +449,11 @@ impl ValidatorNode {
 
         // Serializar y publicar
         let data = serde_json::to_vec(&signed)?;
-        self.swarm.behaviour_mut().gossipsub.publish(topic, data).map_err(|e| NodeError::P2pError(e.to_string()))?;
+        self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, data)
+            .map_err(|e| NodeError::P2pError(e.to_string()))?;
         Ok(())
     }
 
@@ -404,13 +461,19 @@ impl ValidatorNode {
         let mut added = false;
         for (peer, addr) in &self.bootstrap_nodes {
             tracing::info!("Añadiendo nodo bootstrap {} en {}", peer, addr);
-            self.swarm.behaviour_mut().kad.add_address(peer, addr.clone());
+            self.swarm
+                .behaviour_mut()
+                .kad
+                .add_address(peer, addr.clone());
             added = true;
         }
 
         if added {
             if let Err(e) = self.swarm.behaviour_mut().kad.bootstrap() {
-                tracing::warn!("Fallo al iniciar el proceso de bootstrap de Kademlia: {:?}", e);
+                tracing::warn!(
+                    "Fallo al iniciar el proceso de bootstrap de Kademlia: {:?}",
+                    e
+                );
             } else {
                 tracing::info!("Proceso de bootstrap iniciado.");
             }

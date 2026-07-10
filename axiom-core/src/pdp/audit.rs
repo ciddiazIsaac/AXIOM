@@ -1,10 +1,10 @@
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
-use tokio::fs::{OpenOptions, create_dir_all};
+use tokio::fs::{create_dir_all, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::UnboundedReceiver;
-use redis::AsyncCommands;
 
 /// Decisión final del PDP para propósitos de auditoría
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -24,25 +24,25 @@ pub enum AuditDecision {
 pub struct AuditEvent {
     /// Timestamp en nanosegundos (Unix epoch) para alta precisión
     pub timestamp_ns: u128,
-    
+
     /// Identificador único de la sesión
     pub session_id: String,
-    
+
     /// Identidad del usuario que realiza la petición (DID)
     pub user_did: String,
-    
+
     /// Hash del recurso al que se intenta acceder
     pub resource_hash: String,
-    
+
     /// Decisión final tomada por el motor Zero Trust
     pub decision: AuditDecision,
-    
+
     /// Puntuación de riesgo calculada numéricamente
     pub risk_score: f32,
-    
+
     /// Snapshot del contexto en el momento de la decisión (geo, dispositivo, hora)
     pub context_snapshot: Value,
-    
+
     /// Latencia del motor PDP en milisegundos
     pub latency_ms: f64,
 }
@@ -54,7 +54,11 @@ pub struct AuditSpooler;
 impl AuditSpooler {
     /// Inicia el worker en segundo plano.
     /// Toma el receptor del canal asíncrono, la URL de Redis y la ruta base del archivo.
-    pub fn spawn(mut receiver: UnboundedReceiver<AuditEvent>, redis_url: String, log_path: PathBuf) {
+    pub fn spawn(
+        mut receiver: UnboundedReceiver<AuditEvent>,
+        redis_url: String,
+        log_path: PathBuf,
+    ) {
         tokio::spawn(async move {
             // 1. Preparar el fallback en disco (archivo NDJSON)
             if let Some(parent) = log_path.parent() {
@@ -83,11 +87,9 @@ impl AuditSpooler {
 
                     // Intentar enviar a Redis Streams
                     if let Some(con) = &mut redis_con {
-                        let result: Result<(), redis::RedisError> = con.xadd(
-                            "axiom:audit:stream",
-                            "*",
-                            &[("data", &json_string)]
-                        ).await;
+                        let result: Result<(), redis::RedisError> = con
+                            .xadd("axiom:audit:stream", "*", &[("data", &json_string)])
+                            .await;
 
                         if result.is_ok() {
                             sent_to_redis = true;
@@ -97,7 +99,7 @@ impl AuditSpooler {
                     // Fallback a disco si Redis falló o no está disponible
                     if !sent_to_redis {
                         if let Some(f) = &mut file_fallback {
-                            let log_entry = format!("{}\n", json_string);
+                            let log_entry = format!("{json_string}\n");
                             let _ = f.write_all(log_entry.as_bytes()).await;
                         }
                     }

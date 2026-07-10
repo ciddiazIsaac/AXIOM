@@ -49,7 +49,9 @@ impl std::str::FromStr for Metric {
             "avg_latency" => Ok(Metric::AvgLatency),
             "deny_rate" => Ok(Metric::DenyRate),
             "geo_velocity" => Ok(Metric::GeoVelocity),
-            other => anyhow::bail!("Métrica desconocida: '{other}'. Usa: avg_latency | deny_rate | geo_velocity"),
+            other => anyhow::bail!(
+                "Métrica desconocida: '{other}'. Usa: avg_latency | deny_rate | geo_velocity"
+            ),
         }
     }
 }

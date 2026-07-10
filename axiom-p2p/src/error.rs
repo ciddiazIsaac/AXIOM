@@ -4,7 +4,7 @@ use thiserror::Error;
 pub enum NodeError {
     #[error("Error de Automerge: {0}")]
     AutomergeError(#[from] automerge::AutomergeError),
-    
+
     #[error("Error de I/O: {0}")]
     IoError(#[from] std::io::Error),
 

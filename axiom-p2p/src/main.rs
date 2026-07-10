@@ -1,13 +1,17 @@
+use axiom_p2p::node::{NodeConfig, ValidatorNode};
 use clap::Parser;
 use libp2p::{identity::Keypair, Multiaddr, PeerId};
+use std::env;
+use std::time::Duration;
 use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
-use std::time::Duration;
-use std::env;
-use axiom_p2p::node::{NodeConfig, ValidatorNode};
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "AXIOM Validator Node — P2P revocation network")]
+#[command(
+    author,
+    version,
+    about = "AXIOM Validator Node — P2P revocation network"
+)]
 struct Args {
     /// Puerto TCP para escuchar (0 para aleatorio)
     #[arg(short, long, default_value_t = 0)]
@@ -32,7 +36,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    
+
     let args = Args::parse();
 
     // Cargar variables de entorno desde .env (opcional)
@@ -40,8 +44,10 @@ async fn main() -> anyhow::Result<()> {
 
     // 1. Generar o cargar la identidad del nodo (clave ed25519)
     let local_key = if let Ok(hex_key) = env::var("AXIOM_P2P_SECRET_KEY") {
-        let mut bytes = hex::decode(hex_key).expect("AXIOM_P2P_SECRET_KEY debe ser un string hexadecimal válido de 64 caracteres");
-        libp2p::identity::Keypair::ed25519_from_bytes(&mut bytes).expect("Clave ed25519 inválida en AXIOM_P2P_SECRET_KEY")
+        let mut bytes = hex::decode(hex_key)
+            .expect("AXIOM_P2P_SECRET_KEY debe ser un string hexadecimal válido de 64 caracteres");
+        libp2p::identity::Keypair::ed25519_from_bytes(&mut bytes)
+            .expect("Clave ed25519 inválida en AXIOM_P2P_SECRET_KEY")
     } else {
         let key = Keypair::generate_ed25519();
         if let Ok(ed_key) = key.clone().try_into_ed25519() {
@@ -81,7 +87,9 @@ async fn main() -> anyhow::Result<()> {
             bootstrap_nodes.push((pid, addr));
             tracing::info!("[{}] Usando nodo bootstrap: {}", args.name, pid);
         } else {
-            tracing::warn!("Advertencia: La dirección bootstrap no contiene un /p2p/<peer_id>. Ignorando.");
+            tracing::warn!(
+                "Advertencia: La dirección bootstrap no contiene un /p2p/<peer_id>. Ignorando."
+            );
         }
     }
 
@@ -105,14 +113,20 @@ async fn main() -> anyhow::Result<()> {
         let name = args.name.clone();
 
         // Parsear "cred-id" o "cred-id:delay_secs"
-        let (cred_id, delay_secs) = if let Some((id, delay_str)) = auto_revoke_spec.split_once(':') {
+        let (cred_id, delay_secs) = if let Some((id, delay_str)) = auto_revoke_spec.split_once(':')
+        {
             let secs: u64 = delay_str.parse().unwrap_or(5);
             (id.to_string(), secs)
         } else {
             (auto_revoke_spec, 5u64)
         };
 
-        tracing::info!("[{}] Auto-revoke programado: '{}' en {}s", name, cred_id, delay_secs);
+        tracing::info!(
+            "[{}] Auto-revoke programado: '{}' en {}s",
+            name,
+            cred_id,
+            delay_secs
+        );
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(delay_secs)).await;

@@ -1,3 +1,4 @@
+#![allow(warnings)]
 //! axiom-bench: Prueba de Fuego del Stack Redis + ClickHouse
 //!
 //! Dispara N eventos/segundo de decisiones sintéticas contra Redis Streams.
@@ -84,7 +85,7 @@ fn synthetic_event(seq: u64) -> String {
             "geo": geo,
             "device_type": device,
             "hour": format!("{:02}", (seq % 24)),
-            "is_vpn": if seq % 7 == 0 { "true" } else { "false" },
+            "is_vpn": if seq.is_multiple_of(7) { "true" } else { "false" },
             "trust_level": format!("{}", seq % 5)
         },
         "latency_ms": (seq % 50) as f64 * 0.1 + 0.05
@@ -172,8 +173,10 @@ async fn reporter(metrics: Arc<Metrics>, duration_secs: u64) {
 
     // Cabecera de la tabla
     println!();
-    println!("{:<6} {:>10} {:>10} {:>10} {:>10} {:>8}",
-        "t(s)", "total", "rate/s", "errors", "avg_lat_µs", "status");
+    println!(
+        "{:<6} {:>10} {:>10} {:>10} {:>10} {:>8}",
+        "t(s)", "total", "rate/s", "errors", "avg_lat_µs", "status"
+    );
     println!("{}", "─".repeat(62));
 
     loop {
@@ -191,8 +194,10 @@ async fn reporter(metrics: Arc<Metrics>, duration_secs: u64) {
 
         let status = if errors == 0 { "✅ OK" } else { "⚠️  ERR" };
 
-        println!("{:<6} {:>10} {:>10} {:>10} {:>10} {:>8}",
-            elapsed, sent, rate, errors, avg_lat, status);
+        println!(
+            "{:<6} {:>10} {:>10} {:>10} {:>10} {:>8}",
+            elapsed, sent, rate, errors, avg_lat, status
+        );
 
         if elapsed >= duration_secs {
             break;
@@ -213,7 +218,10 @@ async fn main() {
     println!("  Objetivo:    {}/s", cfg.target_rate);
     println!("  Duración:    {}s", cfg.duration_secs);
     println!("  Workers:     {}", cfg.concurrency);
-    println!("  Total:       ~{} eventos", cfg.target_rate * cfg.duration_secs);
+    println!(
+        "  Total:       ~{} eventos",
+        cfg.target_rate * cfg.duration_secs
+    );
     println!();
 
     let metrics = Metrics::new();
@@ -280,10 +288,22 @@ async fn main() {
     println!("╔══════════════════════════════════════════════════╗");
     println!("║                  RESULTADO FINAL                  ║");
     println!("╠══════════════════════════════════════════════════╣");
-    println!("║  Eventos enviados:   {:>10}                   ║", total_sent);
-    println!("║  Errores Redis:      {:>10}                   ║", total_errors);
-    println!("║  Rate real:          {:>8}/s                   ║", real_rate);
-    println!("║  Latencia avg XADD:  {:>8} µs                  ║", avg_lat);
+    println!(
+        "║  Eventos enviados:   {:>10}                   ║",
+        total_sent
+    );
+    println!(
+        "║  Errores Redis:      {:>10}                   ║",
+        total_errors
+    );
+    println!(
+        "║  Rate real:          {:>8}/s                   ║",
+        real_rate
+    );
+    println!(
+        "║  Latencia avg XADD:  {:>8} µs                  ║",
+        avg_lat
+    );
     println!("╠══════════════════════════════════════════════════╣");
     if total_errors == 0 && real_rate >= cfg.target_rate * 80 / 100 {
         println!("║  ✅ PASADO — Stack listo para Semana 8            ║");

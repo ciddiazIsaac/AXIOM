@@ -1,9 +1,11 @@
 //! Policy Decision Point (PDP) para el motor Zero Trust.
 
-/// Motor principal y estructuras de contexto
-pub mod engine;
 /// Módulo para la instrumentación y auditoría del PDP
 pub mod audit;
+/// Motor principal y estructuras de contexto
+pub mod engine;
 
-pub use engine::{ZeroTrustEngine, Decision, ZeroTrustRequest, DeviceContext, ResourceContext, EnvContext};
-pub use audit::{AuditEvent, AuditDecision, AuditSpooler};
+pub use audit::{AuditDecision, AuditEvent, AuditSpooler};
+pub use engine::{
+    Decision, DeviceContext, EnvContext, ResourceContext, ZeroTrustEngine, ZeroTrustRequest,
+};

@@ -23,21 +23,25 @@ impl SecureBytes {
     /// Crea un nuevo `SecureBytes` desde un vector de bytes.
     ///
     /// El vector será zerizado al hacer drop de este objeto.
+    #[must_use]
     pub fn new(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }
 
     /// Acceso de solo lectura al contenido en bytes.
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
     /// Longitud del buffer en bytes.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Retorna `true` si el buffer está vacío.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

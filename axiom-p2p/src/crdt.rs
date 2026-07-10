@@ -1,6 +1,6 @@
-use automerge::{AutoCommit, ObjType, ReadDoc, transaction::Transactable};
-use crate::message::RevocationMessage;
 use crate::error::NodeError;
+use crate::message::RevocationMessage;
+use automerge::{transaction::Transactable, AutoCommit, ObjType, ReadDoc};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
@@ -56,14 +56,14 @@ impl RevocationCrdt {
     }
 
     /// Crea un `RevocationCrdt` respaldado por una base de datos SQLite.
-    /// 
+    ///
     /// Si la base de datos ya contiene un estado previo, lo carga.
     /// De lo contrario, inicializa un documento vacío que se irá
     /// persistiendo con cada cambio.
     pub fn with_storage<P: AsRef<Path>>(path: P) -> Result<Self, NodeError> {
         let path_buf = path.as_ref().to_path_buf();
         let db = Connection::open(&path_buf)?;
-        
+
         // Crear tabla si no existe
         db.execute(
             "CREATE TABLE IF NOT EXISTS crdt_state (
@@ -80,7 +80,7 @@ impl RevocationCrdt {
         {
             let mut stmt = db.prepare("SELECT value FROM crdt_state WHERE key = 'doc_state'")?;
             let mut rows = stmt.query([])?;
-            
+
             if let Some(row) = rows.next()? {
                 let data: Vec<u8> = row.get(0)?;
                 match AutoCommit::load(&data) {
@@ -94,7 +94,10 @@ impl RevocationCrdt {
             }
         }
 
-        Ok(Self { doc, db_path: Some(path_buf) })
+        Ok(Self {
+            doc,
+            db_path: Some(path_buf),
+        })
     }
 
     /// Guarda el estado completo en la base de datos de forma no bloqueante.
@@ -106,19 +109,17 @@ impl RevocationCrdt {
     async fn persist(&mut self) {
         if let Some(path) = self.db_path.clone() {
             let data = self.doc.save();
-            tokio::task::spawn_blocking(move || {
-                match Connection::open(&path) {
-                    Ok(db) => {
-                        if let Err(e) = db.execute(
-                            "INSERT OR REPLACE INTO crdt_state (key, value) VALUES ('doc_state', ?1)",
-                            rusqlite::params![data],
-                        ) {
-                            tracing::error!("Error persistiendo estado a la BD: {:?}", e);
-                        }
+            tokio::task::spawn_blocking(move || match Connection::open(&path) {
+                Ok(db) => {
+                    if let Err(e) = db.execute(
+                        "INSERT OR REPLACE INTO crdt_state (key, value) VALUES ('doc_state', ?1)",
+                        rusqlite::params![data],
+                    ) {
+                        tracing::error!("Error persistiendo estado a la BD: {:?}", e);
                     }
-                    Err(e) => {
-                        tracing::error!("Error abriendo BD para persistir: {:?}", e);
-                    }
+                }
+                Err(e) => {
+                    tracing::error!("Error abriendo BD para persistir: {:?}", e);
                 }
             })
             .await
@@ -134,19 +135,24 @@ impl RevocationCrdt {
     /// Es `async` porque delega la escritura SQLite a `spawn_blocking` (ADR-004 Fase 2).
     pub async fn add(&mut self, revocation: &RevocationMessage) -> Result<bool, NodeError> {
         // Verificar si ya existe
-        let already_exists = self.doc
+        let already_exists = self
+            .doc
             .get(automerge::ROOT, &revocation.credential_id)
             .ok()
             .flatten()
             .is_some();
 
         // Crear el mapa para esta credencial en ROOT
-        let entry_id = self.doc
-            .put_object(automerge::ROOT, &revocation.credential_id, ObjType::Map)?;
+        let entry_id =
+            self.doc
+                .put_object(automerge::ROOT, &revocation.credential_id, ObjType::Map)?;
 
-        self.doc.put(&entry_id, "issuer_did", revocation.issuer_did.as_str())?;
-        self.doc.put(&entry_id, "timestamp", revocation.timestamp as i64)?;
-        self.doc.put(&entry_id, "reason", revocation.reason.as_str())?;
+        self.doc
+            .put(&entry_id, "issuer_did", revocation.issuer_did.as_str())?;
+        self.doc
+            .put(&entry_id, "timestamp", revocation.timestamp as i64)?;
+        self.doc
+            .put(&entry_id, "reason", revocation.reason.as_str())?;
 
         self.persist().await;
 
@@ -238,9 +244,21 @@ impl RevocationCrdt {
     fn read_revocation(&self, credential_id: &str) -> Option<RevocationMessage> {
         let (_, entry_id) = self.doc.get(automerge::ROOT, credential_id).ok()??;
 
-        let issuer_did = self.doc.get(&entry_id, "issuer_did").ok()??.0.into_string().ok()?;
+        let issuer_did = self
+            .doc
+            .get(&entry_id, "issuer_did")
+            .ok()??
+            .0
+            .into_string()
+            .ok()?;
         let timestamp = self.doc.get(&entry_id, "timestamp").ok()??.0.to_i64()? as u64;
-        let reason = self.doc.get(&entry_id, "reason").ok()??.0.into_string().ok()?;
+        let reason = self
+            .doc
+            .get(&entry_id, "reason")
+            .ok()??
+            .0
+            .into_string()
+            .ok()?;
 
         Some(RevocationMessage {
             credential_id: credential_id.to_string(),
@@ -286,8 +304,14 @@ mod tests {
         node2.apply_incremental(&delta_a).await.unwrap();
 
         // Ambos deben tener las mismas revocaciones
-        assert!(node2.is_revoked("cred-alpha"), "cred-alpha debería estar revocada");
-        assert!(node2.is_revoked("cred-beta"), "cred-beta debería estar revocada");
+        assert!(
+            node2.is_revoked("cred-alpha"),
+            "cred-alpha debería estar revocada"
+        );
+        assert!(
+            node2.is_revoked("cred-beta"),
+            "cred-beta debería estar revocada"
+        );
         assert_eq!(node2.count(), 2);
     }
 
@@ -379,7 +403,7 @@ mod tests {
         let mut crdt = RevocationCrdt::new();
         let rev = make_revocation("cred-bool");
 
-        assert!(crdt.add(&rev).await.unwrap());  // primera vez → true
+        assert!(crdt.add(&rev).await.unwrap()); // primera vez → true
         assert!(!crdt.add(&rev).await.unwrap()); // segunda vez → false
     }
 
@@ -391,8 +415,14 @@ mod tests {
         let mut node2 = RevocationCrdt::new();
 
         // Cada nodo revoca una credencial diferente
-        node1.add(&make_revocation("cred-from-node1")).await.unwrap();
-        node2.add(&make_revocation("cred-from-node2")).await.unwrap();
+        node1
+            .add(&make_revocation("cred-from-node1"))
+            .await
+            .unwrap();
+        node2
+            .add(&make_revocation("cred-from-node2"))
+            .await
+            .unwrap();
 
         // Fusionar ambos estados
         let state1 = node1.save_full();
@@ -467,11 +497,14 @@ mod tests {
 
         assert_eq!(all1.len(), 1);
         assert_eq!(all2.len(), 1);
-        
+
         let reason1 = &all1[0].reason;
         let reason2 = &all2[0].reason;
 
-        assert_eq!(reason1, reason2, "La resolución de conflictos debe converger al mismo motivo");
+        assert_eq!(
+            reason1, reason2,
+            "La resolución de conflictos debe converger al mismo motivo"
+        );
         assert!(
             reason1 == "compromised by malware" || reason1 == "employee terminated",
             "El motivo resultante debe ser uno de los dos conflictivos"

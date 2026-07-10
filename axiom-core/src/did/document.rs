@@ -13,16 +13,13 @@ use serde::{Deserialize, Serialize};
 pub const DID_CONTEXT_V1: &str = "https://www.w3.org/ns/did/v1";
 
 /// Contexto W3C para claves de verificación Ed25519.
-pub const DID_CONTEXT_ED25519_2020: &str =
-    "https://w3id.org/security/suites/ed25519-2020/v1";
+pub const DID_CONTEXT_ED25519_2020: &str = "https://w3id.org/security/suites/ed25519-2020/v1";
 
 /// Contexto W3C para JSON Web Keys (usado para Kyber).
-pub const DID_CONTEXT_JWK_2020: &str =
-    "https://w3id.org/security/suites/jws-2020/v1";
+pub const DID_CONTEXT_JWK_2020: &str = "https://w3id.org/security/suites/jws-2020/v1";
 
 /// Contexto específico del proyecto AXIOM.
-pub const DID_CONTEXT_AXIOM: &str =
-    "https://axiom.id/ns/v1";
+pub const DID_CONTEXT_AXIOM: &str = "https://axiom.id/ns/v1";
 
 /// Método de verificación en el DID Document.
 ///
@@ -150,20 +147,21 @@ impl DidDocument {
     /// - Al menos un método de verificación presente
     pub fn validate(&self) -> Result<(), crate::error::AxiomError> {
         if !self.id.starts_with("did:axiom:") {
-            return Err(crate::error::AxiomError::InvalidDocument(
-                format!("DID debe comenzar con 'did:axiom:', encontrado: '{}'", self.id)
-            ));
+            return Err(crate::error::AxiomError::InvalidDocument(format!(
+                "DID debe comenzar con 'did:axiom:', encontrado: '{}'",
+                self.id
+            )));
         }
 
         if !self.context.contains(&DID_CONTEXT_V1.to_string()) {
             return Err(crate::error::AxiomError::InvalidDocument(
-                "El contexto W3C DID v1 es obligatorio".to_string()
+                "El contexto W3C DID v1 es obligatorio".to_string(),
             ));
         }
 
         if self.verification_method.is_empty() {
             return Err(crate::error::AxiomError::InvalidDocument(
-                "El DID Document debe tener al menos un método de verificación".to_string()
+                "El DID Document debe tener al menos un método de verificación".to_string(),
             ));
         }
 
@@ -175,12 +173,12 @@ impl DidDocument {
     /// Esta es la implementación runtime de la Regla de Oro.
     /// Se buscan patrones conocidos de claves privadas en la serialización JSON.
     pub fn assert_no_private_key_material(&self) -> Result<(), crate::error::AxiomError> {
-        let json_str = serde_json::to_string(self)
-            .map_err(|e| crate::error::AxiomError::Serialization(e))?;
+        let json_str =
+            serde_json::to_string(self).map_err(crate::error::AxiomError::Serialization)?;
 
         // Patrones que indican presencia de material privado
         let private_key_patterns = [
-            "\"d\":",         // JWK campo 'd' = clave privada
+            "\"d\":", // JWK campo 'd' = clave privada
             "privateKey",
             "private_key",
             "secretKey",
@@ -191,12 +189,9 @@ impl DidDocument {
 
         for pattern in &private_key_patterns {
             if json_str.contains(pattern) {
-                return Err(crate::error::AxiomError::InvalidDocument(
-                    format!(
-                        "VIOLACIÓN DE REGLA DE ORO: El DID Document contiene material privado: '{}'",
-                        pattern
-                    )
-                ));
+                return Err(crate::error::AxiomError::InvalidDocument(format!(
+                    "VIOLACIÓN DE REGLA DE ORO: El DID Document contiene material privado: '{pattern}'"
+                )));
             }
         }
 
@@ -255,7 +250,8 @@ mod tests {
     fn document_round_trips_through_json() {
         let doc = make_minimal_document();
         let json = serde_json::to_string(&doc).expect("Serialización debe funcionar");
-        let restored: DidDocument = serde_json::from_str(&json).expect("Deserialización debe funcionar");
+        let restored: DidDocument =
+            serde_json::from_str(&json).expect("Deserialización debe funcionar");
         assert_eq!(doc, restored);
     }
 

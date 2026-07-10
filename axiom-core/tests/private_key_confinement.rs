@@ -41,7 +41,13 @@ fn golden_rule_private_key_bytes_not_in_did_document_json() {
     );
 
     // Verificamos que no hay campos con nombres de claves privadas
-    let forbidden_fields = ["privateKey", "private_key", "secretKey", "secret_key", "signingKey"];
+    let forbidden_fields = [
+        "privateKey",
+        "private_key",
+        "secretKey",
+        "secret_key",
+        "signingKey",
+    ];
     for field in &forbidden_fields {
         assert!(
             !json.contains(field),
@@ -160,8 +166,7 @@ fn golden_rule_public_key_is_not_private_key() {
 
     // Una clave pública Ed25519 de 32 bytes nunca puede ser cero
     assert_ne!(
-        pub_bytes,
-        [0u8; 32],
+        pub_bytes, [0u8; 32],
         "La clave pública no debe ser todo ceros"
     );
 

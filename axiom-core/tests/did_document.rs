@@ -12,7 +12,10 @@ fn did_document_has_required_w3c_fields() {
     // Campos obligatorios según W3C DID Core 1.0
     assert!(!doc.id.is_empty(), "id es obligatorio");
     assert!(!doc.context.is_empty(), "@context es obligatorio");
-    assert!(!doc.verification_method.is_empty(), "verificationMethod es obligatorio");
+    assert!(
+        !doc.verification_method.is_empty(),
+        "verificationMethod es obligatorio"
+    );
     assert!(!doc.created.is_empty(), "created es obligatorio");
     assert!(!doc.updated.is_empty(), "updated es obligatorio");
 }
@@ -25,7 +28,8 @@ fn did_document_has_correct_json_ld_contexts() {
 
     // El contexto base W3C es OBLIGATORIO
     assert!(
-        doc.context.contains(&"https://www.w3.org/ns/did/v1".to_string()),
+        doc.context
+            .contains(&"https://www.w3.org/ns/did/v1".to_string()),
         "El contexto W3C DID v1 es obligatorio"
     );
 }
@@ -47,7 +51,9 @@ fn did_document_ed25519_verification_method_is_valid() {
     assert!(ed25519_vm.id.contains("#key-ed25519"));
 
     // Debe tener publicKeyMultibase
-    let multibase = ed25519_vm.public_key_multibase.as_ref()
+    let multibase = ed25519_vm
+        .public_key_multibase
+        .as_ref()
         .expect("Ed25519 debe tener publicKeyMultibase");
 
     // Multibase base58btc comienza con 'z'
@@ -80,7 +86,9 @@ fn did_document_kyber_verification_method_is_valid() {
     assert!(kyber_vm.id.starts_with(&did.id));
     assert!(kyber_vm.id.contains("#key-kyber"));
 
-    let jwk = kyber_vm.public_key_jwk.as_ref()
+    let jwk = kyber_vm
+        .public_key_jwk
+        .as_ref()
         .expect("Kyber debe tener publicKeyJwk");
 
     assert_eq!(jwk["kty"], "PQK", "Kyber debe usar kty='PQK'");
@@ -162,8 +170,8 @@ fn did_document_json_ld_is_parseable() {
     let did = AxiomDid::create(&kp).expect("Crear DID");
 
     let json_ld = did.to_json_ld().expect("Serializar a JSON-LD");
-    let parsed: serde_json::Value = serde_json::from_str(&json_ld)
-        .expect("El JSON-LD debe ser JSON válido");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_ld).expect("El JSON-LD debe ser JSON válido");
 
     assert_eq!(parsed["id"], did.id);
     assert!(parsed["@context"].is_array());
@@ -184,8 +192,8 @@ fn save_and_reload_did_document() {
 
     // Recargar desde disco
     let json = std::fs::read_to_string(&file_path).expect("Leer archivo");
-    let reloaded: axiom_core::did::DidDocument = serde_json::from_str(&json)
-        .expect("Deserializar DID Document guardado");
+    let reloaded: axiom_core::did::DidDocument =
+        serde_json::from_str(&json).expect("Deserializar DID Document guardado");
 
     assert_eq!(did.document, reloaded);
 }

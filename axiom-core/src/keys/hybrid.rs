@@ -29,6 +29,7 @@ impl HybridKeyPair {
     ///
     /// Ambos pares (Ed25519 y Kyber) se generan usando `OsRng` del sistema.
     /// La operación es atómica: o se generan ambos o ninguno.
+    #[must_use]
     pub fn generate() -> Self {
         Self {
             ed25519: Ed25519KeyPair::generate(),
@@ -41,31 +42,37 @@ impl HybridKeyPair {
     // =========================================================================
 
     /// Retorna los bytes de la clave pública Ed25519 (32 bytes).
+    #[must_use]
     pub fn ed25519_public_key_bytes(&self) -> [u8; 32] {
         self.ed25519.public_key_bytes()
     }
 
     /// Retorna la clave pública Ed25519 en formato Multibase (base58btc, prefijo 'z').
+    #[must_use]
     pub fn ed25519_public_key_multibase(&self) -> String {
         self.ed25519.public_key_multibase()
     }
 
     /// Retorna la clave pública Ed25519 en formato JWK.
+    #[must_use]
     pub fn ed25519_public_key_jwk(&self) -> serde_json::Value {
         self.ed25519.public_key_jwk()
     }
 
     /// Retorna los bytes de la clave pública Kyber (1184 bytes para ML-KEM-768).
+    #[must_use]
     pub fn kyber_public_key_bytes(&self) -> &[u8] {
         self.kyber.public_key_bytes()
     }
 
     /// Retorna la clave pública Kyber en formato JWK extendido (kty: "PQK").
+    #[must_use]
     pub fn kyber_public_key_jwk(&self) -> serde_json::Value {
         self.kyber.public_key_jwk()
     }
 
     /// Retorna la clave pública Kyber en formato Multibase.
+    #[must_use]
     pub fn kyber_public_key_multibase(&self) -> String {
         self.kyber.public_key_multibase()
     }
@@ -73,11 +80,13 @@ impl HybridKeyPair {
     /// Firma un mensaje con la clave Ed25519.
     ///
     /// La clave privada permanece en memoria y nunca es retornada.
+    #[must_use]
     pub fn sign(&self, message: &[u8]) -> Vec<u8> {
         self.ed25519.sign(message).to_bytes().to_vec()
     }
 
     /// Encapsula un secreto compartido con la clave pública Kyber.
+    #[must_use]
     pub fn kyber_encapsulate(&self) -> (Vec<u8>, crate::crypto::SecureBytes) {
         self.kyber.encapsulate()
     }
@@ -94,6 +103,7 @@ impl HybridKeyPair {
     /// codificado en base58btc (multibase 'z').
     ///
     /// Este fingerprint es el identificador único del DID `did:axiom:<fingerprint>`.
+    #[must_use]
     pub fn did_fingerprint(&self) -> String {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -112,10 +122,7 @@ impl std::fmt::Debug for HybridKeyPair {
                 "ed25519_public",
                 &hex::encode(self.ed25519.public_key_bytes()),
             )
-            .field(
-                "kyber_public_len",
-                &self.kyber.public_key_bytes().len(),
-            )
+            .field("kyber_public_len", &self.kyber.public_key_bytes().len())
             .field("private_keys", &"[REDACTED]")
             .finish()
     }
@@ -161,7 +168,9 @@ mod tests {
     fn hybrid_kyber_encap_decap_roundtrip() {
         let kp = HybridKeyPair::generate();
         let (ct, ss_enc) = kp.kyber_encapsulate();
-        let ss_dec = kp.kyber_decapsulate(&ct).expect("Decapsulation debe funcionar");
+        let ss_dec = kp
+            .kyber_decapsulate(&ct)
+            .expect("Decapsulation debe funcionar");
         assert_eq!(ss_enc.as_bytes(), ss_dec.as_bytes());
     }
 

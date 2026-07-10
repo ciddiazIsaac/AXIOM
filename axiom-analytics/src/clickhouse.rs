@@ -20,7 +20,10 @@ impl ClickHouseClient {
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .expect("Failed to build reqwest client");
-        Self { http, url: url.into() }
+        Self {
+            http,
+            url: url.into(),
+        }
     }
 
     /// Ejecuta una query SELECT y devuelve cada fila como un JSON object.
@@ -44,7 +47,10 @@ impl ClickHouseClient {
             anyhow::bail!("ClickHouse error {status}: {body}");
         }
 
-        let body = resp.text().await.context("Error leyendo respuesta de ClickHouse")?;
+        let body = resp
+            .text()
+            .await
+            .context("Error leyendo respuesta de ClickHouse")?;
 
         // JSONEachRow: una línea JSON por fila, parsear cada una individualmente
         let rows: Vec<Value> = body

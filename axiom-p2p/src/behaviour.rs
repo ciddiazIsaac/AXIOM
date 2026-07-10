@@ -1,10 +1,9 @@
 use libp2p::{
-    gossipsub, identify, kad, mdns, ping, swarm::NetworkBehaviour,
-    identity::Keypair, PeerId,
+    gossipsub, identify, identity::Keypair, kad, mdns, ping, swarm::NetworkBehaviour, PeerId,
 };
-use std::time::Duration;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::time::Duration;
 
 #[derive(NetworkBehaviour)]
 pub struct ValidatorBehaviour {
@@ -29,14 +28,12 @@ impl ValidatorBehaviour {
         );
 
         // 3. Setup mDNS (Local discovery)
-        let mdns = mdns::tokio::Behaviour::new(
-            mdns::Config::default(),
-            local_peer_id,
-        )?;
+        let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
 
         // 4. Setup Kademlia DHT (Internet discovery)
         let store = kad::store::MemoryStore::new(local_peer_id);
-        let kad = kad::Behaviour::with_config(local_peer_id, store, kad::Config::new(kad::PROTOCOL_NAME));
+        let kad =
+            kad::Behaviour::with_config(local_peer_id, store, kad::Config::new(kad::PROTOCOL_NAME));
 
         // 5. Setup Gossipsub (Message broadcast)
         // We use the hash of the message as the message ID.
@@ -56,7 +53,8 @@ impl ValidatorBehaviour {
         let mut gossipsub = gossipsub::Behaviour::new(
             gossipsub::MessageAuthenticity::Signed(local_key.clone()),
             gossipsub_config,
-        ).map_err(std::io::Error::other)?;
+        )
+        .map_err(std::io::Error::other)?;
 
         // Topic for revocations
         let topic = gossipsub::IdentTopic::new("axiom/revocations/1.0.0");

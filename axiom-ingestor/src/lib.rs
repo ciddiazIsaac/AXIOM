@@ -146,11 +146,7 @@ async fn flush_batch(
         rows.join(", ")
     );
 
-    let resp = client
-        .post(ch_url)
-        .body(query)
-        .send()
-        .await?;
+    let resp = client.post(ch_url).body(query).send().await?;
 
     if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
@@ -169,10 +165,10 @@ pub async fn run_ingestor() -> anyhow::Result<()> {
         .init();
 
     // Leer configuración desde variables de entorno
-    let redis_url = std::env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
-    let ch_url = std::env::var("CLICKHOUSE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8123/".to_string());
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
+    let ch_url =
+        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://127.0.0.1:8123/".to_string());
     let batch_size: usize = std::env::var("BATCH_SIZE")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -196,8 +192,8 @@ pub async fn run_ingestor() -> anyhow::Result<()> {
         .arg("CREATE")
         .arg(REDIS_STREAM)
         .arg(CONSUMER_GROUP)
-        .arg("$")         // Solo mensajes nuevos
-        .arg("MKSTREAM")  // Crea el stream si no existe
+        .arg("$") // Solo mensajes nuevos
+        .arg("MKSTREAM") // Crea el stream si no existe
         .query_async(&mut redis_con)
         .await;
 
@@ -298,9 +294,8 @@ pub async fn run_ingestor() -> anyhow::Result<()> {
                     );
                     // XACK masivo: confirmar todos los mensajes del batch de una vez
                     let ids: Vec<&str> = id_buffer.iter().map(String::as_str).collect();
-                    let ack_result: redis::RedisResult<i64> = redis_con
-                        .xack(REDIS_STREAM, CONSUMER_GROUP, &ids)
-                        .await;
+                    let ack_result: redis::RedisResult<i64> =
+                        redis_con.xack(REDIS_STREAM, CONSUMER_GROUP, &ids).await;
                     if let Err(e) = ack_result {
                         error!("Fallo en XACK masivo de {n} mensajes: {e}");
                     }

@@ -120,7 +120,10 @@ pub async fn anomaly_score(
             Ok(Json(result))
         }
         Err(e) => {
-            error!("Error calculando anomaly_score para {}: {e}", params.user_did);
+            error!(
+                "Error calculando anomaly_score para {}: {e}",
+                params.user_did
+            );
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -130,5 +133,3 @@ pub async fn anomaly_score(
         }
     }
 }
-
-

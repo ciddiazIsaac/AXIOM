@@ -14,13 +14,18 @@ fn full_lifecycle_create_store_resolve() {
     // Paso 2: Crear resolver y almacenar
     let temp = tempdir().expect("tempdir");
     let resolver = LocalResolver::new(temp.path()).expect("Crear LocalResolver");
-    resolver.store(&did.document).expect("Almacenar DID Document");
+    resolver
+        .store(&did.document)
+        .expect("Almacenar DID Document");
 
     // Paso 3: Resolver desde disco (sin red)
     let resolved = resolver.resolve(&did_id).expect("Resolver DID desde disco");
 
     // El documento resuelto debe ser idéntico al original
-    assert_eq!(did.document, resolved, "Round-trip: crear → guardar → resolver debe producir documento idéntico");
+    assert_eq!(
+        did.document, resolved,
+        "Round-trip: crear → guardar → resolver debe producir documento idéntico"
+    );
 }
 
 #[test]
@@ -33,7 +38,10 @@ fn resolver_creates_store_directory_if_not_exists() {
 
     // El resolver lo debe crear automáticamente
     let _resolver = LocalResolver::new(&new_dir).expect("LocalResolver debe crear el directorio");
-    assert!(new_dir.exists(), "El resolver debe crear el directorio si no existe");
+    assert!(
+        new_dir.exists(),
+        "El resolver debe crear el directorio si no existe"
+    );
 }
 
 #[test]
@@ -79,7 +87,8 @@ fn multiple_dids_in_same_store() {
 
     // Verificar que todos se pueden resolver
     for did in &identities {
-        let resolved = resolver.resolve(&did.id)
+        let resolved = resolver
+            .resolve(&did.id)
             .expect(&format!("Resolver {}", did.id));
         assert_eq!(did.document, resolved);
     }
@@ -111,7 +120,10 @@ fn delete_removes_did_from_store() {
     let did_id = did.id.clone();
 
     resolver.store(&did.document).expect("Store");
-    assert!(resolver.resolve(&did_id).is_ok(), "Debe existir antes de borrar");
+    assert!(
+        resolver.resolve(&did_id).is_ok(),
+        "Debe existir antes de borrar"
+    );
 
     resolver.delete(&did_id).expect("Delete");
     assert!(

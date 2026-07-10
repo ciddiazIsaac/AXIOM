@@ -1,3 +1,4 @@
+#![allow(warnings)]
 //! axiom-core — El Núcleo de Titanio
 //!
 //! Implementación del DID Method `did:axiom` siguiendo la especificación W3C DID Core 1.0.

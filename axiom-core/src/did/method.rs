@@ -12,8 +12,8 @@
 use chrono::Utc;
 
 use crate::did::document::{
-    DidDocument, Proof, Service, VerificationMethod,
-    DID_CONTEXT_AXIOM, DID_CONTEXT_ED25519_2020, DID_CONTEXT_JWK_2020, DID_CONTEXT_V1,
+    DidDocument, Proof, Service, VerificationMethod, DID_CONTEXT_AXIOM, DID_CONTEXT_ED25519_2020,
+    DID_CONTEXT_JWK_2020, DID_CONTEXT_V1,
 };
 use crate::error::AxiomError;
 use crate::keys::HybridKeyPair;
@@ -37,8 +37,8 @@ impl AxiomDid {
     /// # Proceso
     /// 1. Deriva el fingerprint DID desde la clave pública Ed25519
     /// 2. Construye el DID Document con dos `verificationMethod`:
-    ///    - `#key-ed25519`: Ed25519VerificationKey2020 (para autenticación y firma)
-    ///    - `#key-kyber`: JsonWebKey2020 con Kyber768 (para key agreement poscuántico)
+    ///    - `#key-ed25519`: `Ed25519VerificationKey2020` (para autenticación y firma)
+    ///    - `#key-kyber`: `JsonWebKey2020` con Kyber768 (para key agreement poscuántico)
     /// 3. Firma el documento con la clave Ed25519 del keypair
     /// 4. Valida la Regla de Oro antes de retornar
     ///
@@ -48,11 +48,11 @@ impl AxiomDid {
     /// antes de retornar.
     pub fn create(keypair: &HybridKeyPair) -> Result<Self, AxiomError> {
         let fingerprint = keypair.did_fingerprint();
-        let did_id = format!("did:axiom:{}", fingerprint);
+        let did_id = format!("did:axiom:{fingerprint}");
         let now = Utc::now().to_rfc3339();
 
         // --- Método de verificación Ed25519 ---
-        let ed25519_vm_id = format!("{}#key-ed25519", did_id);
+        let ed25519_vm_id = format!("{did_id}#key-ed25519");
         let ed25519_vm = VerificationMethod {
             id: ed25519_vm_id.clone(),
             key_type: "Ed25519VerificationKey2020".to_string(),
@@ -62,7 +62,7 @@ impl AxiomDid {
         };
 
         // --- Método de verificación Kyber (Key Agreement poscuántico) ---
-        let kyber_vm_id = format!("{}#key-kyber", did_id);
+        let kyber_vm_id = format!("{did_id}#key-kyber");
         let kyber_vm = VerificationMethod {
             id: kyber_vm_id.clone(),
             key_type: "JsonWebKey2020".to_string(),
@@ -72,12 +72,9 @@ impl AxiomDid {
         };
 
         // --- Firma del documento (sobre el DID id + timestamp) ---
-        let signing_payload = format!("{}|{}", did_id, now);
+        let signing_payload = format!("{did_id}|{now}");
         let signature_bytes = keypair.sign(signing_payload.as_bytes());
-        let proof_value = multibase::encode(
-            multibase::Base::Base58Btc,
-            &signature_bytes,
-        );
+        let proof_value = multibase::encode(multibase::Base::Base58Btc, &signature_bytes);
 
         let proof = Proof {
             proof_type: "Ed25519Signature2020".to_string(),
@@ -189,7 +186,10 @@ mod tests {
     fn did_document_has_proof() {
         let kp = HybridKeyPair::generate();
         let did = AxiomDid::create(&kp).expect("Crear DID");
-        assert!(did.document.proof.is_some(), "El DID Document debe tener prueba de integridad");
+        assert!(
+            did.document.proof.is_some(),
+            "El DID Document debe tener prueba de integridad"
+        );
         let proof = did.document.proof.as_ref().unwrap();
         assert_eq!(proof.proof_type, "Ed25519Signature2020");
     }
@@ -206,8 +206,7 @@ mod tests {
         let kp = HybridKeyPair::generate();
         let did = AxiomDid::create(&kp).expect("Crear DID");
         let json = did.to_json_ld().expect("Serialización debe funcionar");
-        let parsed: serde_json::Value = serde_json::from_str(&json)
-            .expect("JSON debe ser válido");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("JSON debe ser válido");
         assert!(parsed["id"].is_string());
         assert!(parsed["@context"].is_array());
     }

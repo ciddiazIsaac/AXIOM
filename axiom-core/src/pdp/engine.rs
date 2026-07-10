@@ -1,9 +1,9 @@
 use crate::error::AxiomError;
+use crate::pdp::audit::{AuditDecision, AuditEvent};
 use regorus::Engine;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
-use crate::pdp::audit::{AuditEvent, AuditDecision};
 
 /// Estructura de decisión devuelta por el PDP
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -65,7 +65,7 @@ pub struct ZeroTrustRequest {
 }
 
 /// Motor Zero Trust embebido
-/// 
+///
 /// Se encarga de evaluar las peticiones contra las políticas de Rego.
 #[derive(Clone)]
 pub struct ZeroTrustEngine {
@@ -78,9 +78,12 @@ impl ZeroTrustEngine {
     /// Inicializa el motor PDP cargando la política Rego.
     pub fn new(rego_policy: &str) -> Result<Self, AxiomError> {
         let mut engine = Engine::new();
-        engine.add_policy("zero_trust.rego".to_string(), rego_policy.to_string())
-            .map_err(|e| AxiomError::InternalError(format!("Failed to compile Rego policy: {}", e)))?;
-        Ok(Self { 
+        engine
+            .add_policy("zero_trust.rego".to_string(), rego_policy.to_string())
+            .map_err(|e| {
+                AxiomError::InternalError(format!("Failed to compile Rego policy: {e}"))
+            })?;
+        Ok(Self {
             base_engine: engine,
             pool: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             audit_sender: None,
@@ -88,6 +91,7 @@ impl ZeroTrustEngine {
     }
 
     /// Configura el canal para emitir eventos de auditoría (no bloqueante)
+    #[must_use]
     pub fn with_audit(mut self, sender: UnboundedSender<AuditEvent>) -> Self {
         self.audit_sender = Some(sender);
         self
@@ -96,33 +100,42 @@ impl ZeroTrustEngine {
     /// Evalúa la solicitud contra las políticas de Zero Trust
     pub fn evaluate(&self, request: &ZeroTrustRequest) -> Result<Decision, AxiomError> {
         let start_time = Instant::now();
-        
+
         let mut engine = {
-            let mut pool = self.pool.lock().map_err(|e| AxiomError::InternalError(format!("Mutex poisoned: {e}")))?;
+            let mut pool = self
+                .pool
+                .lock()
+                .map_err(|e| AxiomError::InternalError(format!("Mutex poisoned: {e}")))?;
             pool.pop().unwrap_or_else(|| self.base_engine.clone())
         };
-        
+
         let input_json = serde_json::to_string(request)
-            .map_err(|e| AxiomError::InternalError(format!("Failed to serialize input: {}", e)))?;
-            
-        let input_val = regorus::Value::from_json_str(&input_json)
-            .map_err(|e| AxiomError::InternalError(format!("Failed to parse JSON for Rego: {}", e)))?;
-            
+            .map_err(|e| AxiomError::InternalError(format!("Failed to serialize input: {e}")))?;
+
+        let input_val = regorus::Value::from_json_str(&input_json).map_err(|e| {
+            AxiomError::InternalError(format!("Failed to parse JSON for Rego: {e}"))
+        })?;
+
         engine.set_input(input_val);
-        
-        let results = engine.eval_query("data.axiom.pdp".to_string(), false)
+
+        let results = engine
+            .eval_query("data.axiom.pdp".to_string(), false)
             .map_err(|e| AxiomError::InternalError(format!("Query failed: {e}")))?;
-            
+
         // Regresamos el engine al pool inmediatamente
         {
-            let mut pool = self.pool.lock().map_err(|e| AxiomError::InternalError(format!("Mutex poisoned: {e}")))?;
+            let mut pool = self
+                .pool
+                .lock()
+                .map_err(|e| AxiomError::InternalError(format!("Mutex poisoned: {e}")))?;
             pool.push(engine);
         }
-            
-        let val = results.result.first().ok_or_else(|| {
-            AxiomError::InternalError("No result for data.axiom.pdp".to_string())
-        })?;
-        
+
+        let val = results
+            .result
+            .first()
+            .ok_or_else(|| AxiomError::InternalError("No result for data.axiom.pdp".to_string()))?;
+
         let exprs = &val.expressions;
         let pdp_obj = if let Some(v) = exprs.first() {
             serde_json::to_value(&v.value).unwrap_or(serde_json::Value::Null)
@@ -130,12 +143,27 @@ impl ZeroTrustEngine {
             serde_json::Value::Null
         };
 
-        let allow = pdp_obj.get("allow").and_then(serde_json::Value::as_bool).unwrap_or(false);
-        let requires_2fa = pdp_obj.get("requires_2fa").and_then(serde_json::Value::as_bool).unwrap_or(false);
-        let requires_biometric = pdp_obj.get("requires_biometric").and_then(serde_json::Value::as_bool).unwrap_or(false);
-        let block = pdp_obj.get("block").and_then(serde_json::Value::as_bool).unwrap_or(false);
-        let alert = pdp_obj.get("alert").and_then(serde_json::Value::as_bool).unwrap_or(false);
-        
+        let allow = pdp_obj
+            .get("allow")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let requires_2fa = pdp_obj
+            .get("requires_2fa")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let requires_biometric = pdp_obj
+            .get("requires_biometric")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let block = pdp_obj
+            .get("block")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let alert = pdp_obj
+            .get("alert")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+
         let decision_type = if block {
             AuditDecision::Deny
         } else if requires_2fa || requires_biometric {
@@ -148,7 +176,7 @@ impl ZeroTrustEngine {
 
         // Calculamos el riesgo base invertido a partir del trust score
         let mut risk_score = 1.0 - request.device.trust_score;
-        
+
         // Calculamos la geo-velocidad (km/min)
         let geo_velocity = if request.context.time_delta_mins > 0.0 {
             request.context.distance_km / request.context.time_delta_mins
@@ -172,7 +200,7 @@ impl ZeroTrustEngine {
 
         let latency = start_time.elapsed();
         let latency_ms = latency.as_secs_f64() * 1000.0;
-        
+
         let timestamp_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -207,7 +235,6 @@ impl ZeroTrustEngine {
             alert,
         })
     }
-
 }
 
 #[cfg(test)]
@@ -241,7 +268,7 @@ mod tests {
         let engine = ZeroTrustEngine::new(REGO_POLICY).unwrap();
         let req = make_base_request();
         let dec = engine.evaluate(&req).unwrap();
-        
+
         assert!(dec.allow);
         assert!(!dec.requires_2fa);
         assert!(!dec.requires_biometric);
@@ -255,7 +282,7 @@ mod tests {
         let mut req = make_base_request();
         req.device.trust_score = 0.5; // < 0.7 triggers Rule 1
         let dec = engine.evaluate(&req).unwrap();
-        
+
         assert!(dec.allow);
         assert!(dec.requires_2fa);
         assert!(!dec.block);
@@ -268,7 +295,7 @@ mod tests {
         req.context.distance_km = 1500.0; // > 1000
         req.context.time_delta_mins = 5.0; // < 10
         let dec = engine.evaluate(&req).unwrap();
-        
+
         assert!(!dec.allow); // Block overrides allow in the policy
         assert!(dec.block);
         assert!(dec.alert);
@@ -280,7 +307,7 @@ mod tests {
         let mut req = make_base_request();
         req.resource.name = "Admin".to_string(); // triggers Rule 3
         let dec = engine.evaluate(&req).unwrap();
-        
+
         assert!(dec.allow);
         assert!(dec.requires_biometric);
     }

@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use axiom_core::pdp::{DeviceContext, EnvContext, ResourceContext, ZeroTrustEngine, ZeroTrustRequest};
+    use axiom_core::pdp::{
+        DeviceContext, EnvContext, ResourceContext, ZeroTrustEngine, ZeroTrustRequest,
+    };
 
     const REGO_POLICY: &str = r#"
 package axiom.pdp
@@ -44,11 +46,21 @@ allow if {
         let req = ZeroTrustRequest {
             session_id: "test-session".into(),
             user_did: "did:axiom:test".into(),
-            device: DeviceContext { trust_score: 0.9, id: "dev-1".into() },
-            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0, anomaly_score: None },
-            resource: ResourceContext { name: "Dashboard".into(), hash: "test-hash".into() },
+            device: DeviceContext {
+                trust_score: 0.9,
+                id: "dev-1".into(),
+            },
+            context: EnvContext {
+                distance_km: 10.0,
+                time_delta_mins: 60.0,
+                anomaly_score: None,
+            },
+            resource: ResourceContext {
+                name: "Dashboard".into(),
+                hash: "test-hash".into(),
+            },
         };
-        
+
         let decision = engine.evaluate(&req).unwrap();
         assert!(decision.allow);
         assert!(!decision.requires_2fa);
@@ -63,11 +75,21 @@ allow if {
         let req = ZeroTrustRequest {
             session_id: "test-session".into(),
             user_did: "did:axiom:test".into(),
-            device: DeviceContext { trust_score: 0.5, id: "dev-1".into() },
-            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0, anomaly_score: None },
-            resource: ResourceContext { name: "Dashboard".into(), hash: "test-hash".into() },
+            device: DeviceContext {
+                trust_score: 0.5,
+                id: "dev-1".into(),
+            },
+            context: EnvContext {
+                distance_km: 10.0,
+                time_delta_mins: 60.0,
+                anomaly_score: None,
+            },
+            resource: ResourceContext {
+                name: "Dashboard".into(),
+                hash: "test-hash".into(),
+            },
         };
-        
+
         let decision = engine.evaluate(&req).unwrap();
         assert!(decision.allow); // Still allowed, but requires 2FA
         assert!(decision.requires_2fa);
@@ -81,11 +103,21 @@ allow if {
         let req = ZeroTrustRequest {
             session_id: "test-session".into(),
             user_did: "did:axiom:test".into(),
-            device: DeviceContext { trust_score: 0.9, id: "dev-1".into() },
-            context: EnvContext { distance_km: 5000.0, time_delta_mins: 5.0, anomaly_score: None }, // 5000km in 5 minutes
-            resource: ResourceContext { name: "Dashboard".into(), hash: "test-hash".into() },
+            device: DeviceContext {
+                trust_score: 0.9,
+                id: "dev-1".into(),
+            },
+            context: EnvContext {
+                distance_km: 5000.0,
+                time_delta_mins: 5.0,
+                anomaly_score: None,
+            }, // 5000km in 5 minutes
+            resource: ResourceContext {
+                name: "Dashboard".into(),
+                hash: "test-hash".into(),
+            },
         };
-        
+
         let decision = engine.evaluate(&req).unwrap();
         assert!(!decision.allow);
         assert!(decision.block);
@@ -98,11 +130,21 @@ allow if {
         let req = ZeroTrustRequest {
             session_id: "test-session".into(),
             user_did: "did:axiom:test".into(),
-            device: DeviceContext { trust_score: 0.9, id: "dev-1".into() },
-            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0, anomaly_score: None },
-            resource: ResourceContext { name: "Admin".into(), hash: "test-hash".into() },
+            device: DeviceContext {
+                trust_score: 0.9,
+                id: "dev-1".into(),
+            },
+            context: EnvContext {
+                distance_km: 10.0,
+                time_delta_mins: 60.0,
+                anomaly_score: None,
+            },
+            resource: ResourceContext {
+                name: "Admin".into(),
+                hash: "test-hash".into(),
+            },
         };
-        
+
         let decision = engine.evaluate(&req).unwrap();
         assert!(decision.allow);
         assert!(decision.requires_biometric);
@@ -115,17 +157,27 @@ allow if {
         let req = ZeroTrustRequest {
             session_id: "test-session".into(),
             user_did: "did:axiom:test".into(),
-            device: DeviceContext { trust_score: 0.9, id: "dev-1".into() },
-            context: EnvContext { distance_km: 10.0, time_delta_mins: 60.0, anomaly_score: None },
-            resource: ResourceContext { name: "Dashboard".into(), hash: "test-hash".into() },
+            device: DeviceContext {
+                trust_score: 0.9,
+                id: "dev-1".into(),
+            },
+            context: EnvContext {
+                distance_km: 10.0,
+                time_delta_mins: 60.0,
+                anomaly_score: None,
+            },
+            resource: ResourceContext {
+                name: "Dashboard".into(),
+                hash: "test-hash".into(),
+            },
         };
-        
+
         let start = std::time::Instant::now();
         for _ in 0..100 {
             engine.evaluate(&req).unwrap();
         }
         let elapsed = start.elapsed();
         // Ensure that average evaluation time is well under 50ms (e.g. < 5ms)
-        assert!(elapsed.as_millis() < 500); 
+        assert!(elapsed.as_millis() < 500);
     }
 }

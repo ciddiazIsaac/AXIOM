@@ -41,12 +41,14 @@ impl Ed25519KeyPair {
     /// Firma un mensaje y retorna la firma Ed25519 (64 bytes).
     ///
     /// La clave privada permanece en memoria — solo se produce la firma.
+    #[must_use]
     pub fn sign(&self, message: &[u8]) -> Signature {
         use ed25519_dalek::Signer;
         self.signing_key.sign(message)
     }
 
     /// Retorna los bytes crudos de la clave pública (32 bytes).
+    #[must_use]
     pub fn public_key_bytes(&self) -> [u8; 32] {
         self.verifying_key.to_bytes()
     }
@@ -54,6 +56,7 @@ impl Ed25519KeyPair {
     /// Retorna la clave pública codificada en Multibase (base58btc, prefijo 'z').
     ///
     /// Este es el formato estándar para `publicKeyMultibase` en DID Documents W3C.
+    #[must_use]
     pub fn public_key_multibase(&self) -> String {
         // Prefijo 0xed01 indica Ed25519 en Multicodec
         let mut prefixed = vec![0xed, 0x01];
@@ -64,6 +67,7 @@ impl Ed25519KeyPair {
     /// Retorna la representación JWK de la clave pública (OKP, crv: Ed25519).
     ///
     /// Compatible con la especificación `JsonWebKey2020` del W3C DID.
+    #[must_use]
     pub fn public_key_jwk(&self) -> serde_json::Value {
         let x_b64 = base64::Engine::encode(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD,
@@ -111,7 +115,10 @@ mod tests {
     fn multibase_starts_with_z() {
         let kp = Ed25519KeyPair::generate();
         let mb = kp.public_key_multibase();
-        assert!(mb.starts_with('z'), "Multibase base58btc debe comenzar con 'z'");
+        assert!(
+            mb.starts_with('z'),
+            "Multibase base58btc debe comenzar con 'z'"
+        );
     }
 
     #[test]
@@ -132,6 +139,9 @@ mod tests {
         assert_eq!(jwk["crv"], "Ed25519");
         assert!(jwk["x"].is_string());
         // JWK no debe contener 'd' (clave privada en JWK)
-        assert!(jwk.get("d").is_none(), "JWK no debe contener clave privada 'd'");
+        assert!(
+            jwk.get("d").is_none(),
+            "JWK no debe contener clave privada 'd'"
+        );
     }
 }

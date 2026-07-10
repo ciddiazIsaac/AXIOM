@@ -60,8 +60,7 @@ impl LocalResolver {
         // Validar formato básico
         if !did.starts_with("did:axiom:") {
             return Err(AxiomError::InvalidDid(format!(
-                "El DID '{}' no es un DID AXIOM válido (debe comenzar con 'did:axiom:')",
-                did
+                "El DID '{did}' no es un DID AXIOM válido (debe comenzar con 'did:axiom:')"
             )));
         }
 
@@ -142,7 +141,7 @@ impl LocalResolver {
     /// Ejemplo: `did:axiom:z123` → `<store_path>/did_axiom_z123.json`
     fn did_to_file_path(&self, did: &str) -> PathBuf {
         let safe_name = did.replace(':', "_");
-        self.store_path.join(format!("{}.json", safe_name))
+        self.store_path.join(format!("{safe_name}.json"))
     }
 }
 
@@ -185,7 +184,10 @@ mod tests {
         resolver.store(&doc).expect("Store debe funcionar");
         let resolved = resolver.resolve(did).expect("Resolve debe funcionar");
 
-        assert_eq!(doc, resolved, "El documento resuelto debe ser idéntico al almacenado");
+        assert_eq!(
+            doc, resolved,
+            "El documento resuelto debe ser idéntico al almacenado"
+        );
     }
 
     #[test]

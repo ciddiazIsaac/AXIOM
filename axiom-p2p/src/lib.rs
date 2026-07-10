@@ -1,10 +1,10 @@
 pub mod behaviour;
-pub mod node;
-pub mod message;
 pub mod crdt;
 pub mod error;
+pub mod message;
+pub mod node;
 
 pub use behaviour::ValidatorBehaviour;
-pub use node::{ValidatorNode, NodeConfig, NodeCommand};
-pub use message::{RevocationMessage, GossipPayload};
 pub use crdt::RevocationCrdt;
+pub use message::{GossipPayload, RevocationMessage};
+pub use node::{NodeCommand, NodeConfig, ValidatorNode};

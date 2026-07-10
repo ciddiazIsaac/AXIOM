@@ -30,6 +30,7 @@ pub struct KyberKeyPair {
 
 impl KyberKeyPair {
     /// Genera un nuevo par de claves ML-KEM-768 usando el CSPRNG del sistema.
+    #[must_use]
     pub fn generate() -> Self {
         let (public_key, secret_key) = keypair();
         Self {
@@ -39,6 +40,7 @@ impl KyberKeyPair {
     }
 
     /// Retorna los bytes crudos de la clave pública (1184 bytes para Kyber768).
+    #[must_use]
     pub fn public_key_bytes(&self) -> &[u8] {
         self.public_key.as_bytes()
     }
@@ -50,7 +52,8 @@ impl KyberKeyPair {
     ///
     /// # Uso típico
     /// El remitente (que solo tiene la clave pública) llama a `encapsulate`,
-    /// envía el ciphertext al destinatario, y ambos derivan el mismo shared_secret.
+    /// envía el ciphertext al destinatario, y ambos derivan el mismo `shared_secret`.
+    #[must_use]
     pub fn encapsulate(&self) -> (Vec<u8>, SecureBytes) {
         let (shared_secret, ciphertext) = encapsulate(&self.public_key);
         (
@@ -64,9 +67,8 @@ impl KyberKeyPair {
     /// # Errores
     /// Retorna `AxiomError::Crypto` si el ciphertext es inválido o tiene longitud incorrecta.
     pub fn decapsulate(&self, ciphertext_bytes: &[u8]) -> Result<SecureBytes, AxiomError> {
-        let ct = Ciphertext::from_bytes(ciphertext_bytes).map_err(|_| {
-            AxiomError::Crypto("Invalid Kyber ciphertext length".to_string())
-        })?;
+        let ct = Ciphertext::from_bytes(ciphertext_bytes)
+            .map_err(|_| AxiomError::Crypto("Invalid Kyber ciphertext length".to_string()))?;
         let shared_secret = decapsulate(&ct, &self.secret_key);
         Ok(SecureBytes::new(shared_secret.as_bytes().to_vec()))
     }
@@ -75,6 +77,7 @@ impl KyberKeyPair {
     ///
     /// Nota: Kyber no tiene una representación JWK estándar aún (pendiente IETF).
     /// Usamos una extensión provisional con `kty: "PQK"` y `crv: "Kyber768"`.
+    #[must_use]
     pub fn public_key_jwk(&self) -> serde_json::Value {
         let pub_b64 = base64::Engine::encode(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD,
@@ -89,6 +92,7 @@ impl KyberKeyPair {
     }
 
     /// Retorna la clave pública codificada en Multibase (base64url, prefijo 'u').
+    #[must_use]
     pub fn public_key_multibase(&self) -> String {
         multibase::encode(multibase::Base::Base64Url, self.public_key.as_bytes())
     }
@@ -122,7 +126,9 @@ mod tests {
     fn encapsulate_decapsulate_roundtrip() {
         let kp = KyberKeyPair::generate();
         let (ciphertext, shared_secret_enc) = kp.encapsulate();
-        let shared_secret_dec = kp.decapsulate(&ciphertext).expect("Decapsulation must succeed");
+        let shared_secret_dec = kp
+            .decapsulate(&ciphertext)
+            .expect("Decapsulation must succeed");
 
         // Ambas partes deben tener el mismo secreto compartido
         assert_eq!(

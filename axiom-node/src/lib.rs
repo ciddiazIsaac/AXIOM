@@ -1,23 +1,24 @@
 use axum::{
+    response::IntoResponse,
     routing::{get, post},
-    Router, response::IntoResponse,
+    Router,
 };
-use tower_http::services::ServeDir;
-use prometheus_client::registry::Registry;
+use prometheus_client::encoding::text::encode;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::histogram::Histogram;
-use prometheus_client::encoding::text::encode;
+use prometheus_client::registry::Registry;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{info, error};
+use tower_http::services::ServeDir;
+use tracing::{error, info};
 
 // Imports de otros subsistemas
-use axiom_p2p::node::{ValidatorNode, NodeConfig, NodeCommand};
-use libp2p::identity::Keypair;
-use pdp_server::{build_app_state, verify_request, AppState as PdpState, AiMetrics};
-use axiom_analytics::{anomaly_score, AppState as AnalyticsState};
 use axiom_analytics::clickhouse::ClickHouseClient;
+use axiom_analytics::{anomaly_score, AppState as AnalyticsState};
+use axiom_p2p::node::{NodeCommand, NodeConfig, ValidatorNode};
+use libp2p::identity::Keypair;
+use pdp_server::{build_app_state, verify_request, AiMetrics, AppState as PdpState};
 
 #[derive(Clone)]
 pub struct MetricsState {
@@ -34,26 +35,37 @@ pub struct AppStateUnified {
 
 pub async fn run_server() -> anyhow::Result<()> {
     // Inicializar logging
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("info").init();
 
     info!("Iniciando AXIOM Node - El Contenedor y la Integración");
 
     // 1. Inicializar métricas Prometheus
     let mut registry = Registry::default();
-    
+
     // Configurar métricas (en una implementación real actualizaríamos estos contadores
     // dentro de los handlers, envolviéndolos o pasándolos en el estado)
     // Para simplificar, aquí solo los registramos
-    let pdp_decision_total = Family::<Vec<(String, String)>, prometheus_client::metrics::counter::Counter>::default();
-    registry.register("pdp_decision_total", "Total de decisiones del PDP", pdp_decision_total.clone());
+    let pdp_decision_total =
+        Family::<Vec<(String, String)>, prometheus_client::metrics::counter::Counter>::default();
+    registry.register(
+        "pdp_decision_total",
+        "Total de decisiones del PDP",
+        pdp_decision_total.clone(),
+    );
 
     let pdp_latency_seconds = Histogram::new(vec![0.01, 0.05, 0.1, 0.5, 1.0].into_iter());
-    registry.register("pdp_latency_seconds", "Latencia del PDP", pdp_latency_seconds.clone());
+    registry.register(
+        "pdp_latency_seconds",
+        "Latencia del PDP",
+        pdp_latency_seconds.clone(),
+    );
 
     let p2p_peers_connected = Gauge::<i64>::default();
-    registry.register("p2p_peers_connected", "Peers P2P conectados", p2p_peers_connected.clone());
+    registry.register(
+        "p2p_peers_connected",
+        "Peers P2P conectados",
+        p2p_peers_connected.clone(),
+    );
 
     let ai_metrics = AiMetrics {
         pdp_decision_total,
@@ -98,20 +110,29 @@ pub async fn run_server() -> anyhow::Result<()> {
             if let Ok(ed_key) = key.clone().try_into_ed25519() {
                 tracing::warn!("============================================================");
                 tracing::warn!("⚠️  ADVERTENCIA: No se encontró AXIOM_P2P_SECRET_KEY.");
-                tracing::warn!("Se ha generado una identidad EFÍMERA. PeerId cambiará al reiniciar.");
+                tracing::warn!(
+                    "Se ha generado una identidad EFÍMERA. PeerId cambiará al reiniciar."
+                );
                 tracing::warn!("Para hacerla persistente, añade a tu Secret de K8s:");
-                tracing::warn!("AXIOM_P2P_SECRET_KEY={}", hex::encode(ed_key.secret().as_ref()));
+                tracing::warn!(
+                    "AXIOM_P2P_SECRET_KEY={}",
+                    hex::encode(ed_key.secret().as_ref())
+                );
                 tracing::warn!("============================================================");
             }
             key
         };
 
         let crdt_db_path = std::env::var("CRDT_DB_PATH").unwrap_or_else(|_| {
-            let fallback_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis().to_string();
-            let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| fallback_id);
+            let fallback_id = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+                .to_string();
+            let hostname = std::env::var("HOSTNAME").unwrap_or(fallback_id);
             format!("/data/crdt_{}.db", hostname)
         });
-        
+
         let dial_addrs_str = std::env::var("P2P_DIAL_ADDRS").unwrap_or_default();
         let mut dial_addrs = vec![];
         if !dial_addrs_str.is_empty() {
@@ -139,11 +160,11 @@ pub async fn run_server() -> anyhow::Result<()> {
         node.run_with_commands(rx_p2p).await;
     });
 
-
     // 4. Levantar el Servidor HTTP unificado
     // Obtener estados
     let pdp_state = build_app_state(ai_metrics).await;
-    let clickhouse_url = std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://clickhouse:8123/".to_string());
+    let clickhouse_url =
+        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://clickhouse:8123/".to_string());
     let analytics_state = AnalyticsState {
         ch: Arc::new(ClickHouseClient::new(clickhouse_url)),
     };
@@ -178,7 +199,7 @@ pub async fn run_server() -> anyhow::Result<()> {
             let auth_header = headers.get(axum::http::header::AUTHORIZATION)
                 .and_then(|val| val.to_str().ok())
                 .unwrap_or("");
-            
+
             if auth_header != format!("Bearer {}", expected_token) {
                 return (axum::http::StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
             }
@@ -217,7 +238,7 @@ pub async fn run_server() -> anyhow::Result<()> {
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let bind_addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&bind_addr).await.unwrap();
-    
+
     info!("AXIOM Node unificado escuchando en http://{}", bind_addr);
     axum::serve(listener, app).await.unwrap();
 

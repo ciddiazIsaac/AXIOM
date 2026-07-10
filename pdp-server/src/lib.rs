@@ -1,15 +1,15 @@
+use axiom_core::pdp::{AuditSpooler, Decision, ZeroTrustEngine, ZeroTrustRequest};
 use axum::{
-    extract::{State, Query},
+    extract::{Query, State},
     Json,
 };
 use serde::{Deserialize, Serialize};
-use axiom_core::pdp::{Decision, ZeroTrustEngine, ZeroTrustRequest, AuditSpooler};
 use std::sync::Arc;
 use std::time::Instant;
 
-use prometheus_client::metrics::histogram::Histogram;
-use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::counter::Counter;
+use prometheus_client::metrics::family::Family;
+use prometheus_client::metrics::histogram::Histogram;
 
 // ─── Métricas de IA ──────────────────────────────────────────────────────────
 
@@ -37,9 +37,9 @@ pub struct AppState {
 pub async fn build_app_state(ai_metrics: AiMetrics) -> AppState {
     let policy = std::fs::read_to_string("../axiom-core/policies/zero_trust.rego")
         .expect("Failed to read zero_trust.rego policy file");
-        
+
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    
+
     // Iniciar el Spooler en segundo plano con Redis como broker
     let log_path = std::path::PathBuf::from("./logs/audit.ndjson");
     let redis_url = "redis://redis:6379/".to_string();
@@ -53,7 +53,7 @@ pub async fn build_app_state(ai_metrics: AiMetrics) -> AppState {
         .build()
         .unwrap();
     let clickhouse_url = "http://clickhouse:8123/".to_string();
-    
+
     AppState {
         engine: Arc::new(engine),
         http_client,
@@ -91,18 +91,18 @@ pub async fn verify_request(
     } else {
         "ALLOW"
     };
-    
+
     // Usamos pdp_decision_total como lo espera Grafana
-    state.ai_metrics.pdp_decision_total
-        .get_or_create(&vec![
-            ("decision".to_string(), rego_decision.to_string()),
-        ])
+    state
+        .ai_metrics
+        .pdp_decision_total
+        .get_or_create(&vec![("decision".to_string(), rego_decision.to_string())])
         .inc();
-        
+
     // También registramos la latencia del PDP
     let latency_secs = t_start.elapsed().as_secs_f64();
     state.ai_metrics.pdp_latency_seconds.observe(latency_secs);
-    
+
     // Además podemos mantener el de AI (que usa tags source=rego) si el dashboard lo usa
     // ya no lo mantenemos porque borramos decision_total
 
@@ -155,7 +155,7 @@ pub async fn anomaly_score_handler(
     Query(query): Query<AnomalyQuery>,
 ) -> Json<AnomalyScore> {
     let user_did = query.user;
-    
+
     // 1. Fetch baseline from MV
     let query_baseline = format!(
         "SELECT \
@@ -167,14 +167,17 @@ pub async fn anomaly_score_handler(
         user_did.replace('\'', "\\'")
     );
 
-    let baseline_res = state.http_client.post(&state.clickhouse_url)
+    let baseline_res = state
+        .http_client
+        .post(&state.clickhouse_url)
         .body(query_baseline)
-        .send().await;
-        
+        .send()
+        .await;
+
     let mut mean = 0.0;
     let mut std_dev = 0.0;
     let mut p99 = 0.0;
-    
+
     if let Ok(res) = baseline_res {
         if let Ok(stats) = res.json::<ChStatsResponse>().await {
             if let Some(row) = stats.data.first() {
@@ -193,12 +196,15 @@ pub async fn anomaly_score_handler(
          FROM audit_events \
          WHERE user_did = '{}' \
          ORDER BY timestamp_ns DESC LIMIT 1 FORMAT JSON",
-         user_did.replace('\'', "\\'")
+        user_did.replace('\'', "\\'")
     );
 
-    let latest_res = state.http_client.post(&state.clickhouse_url)
+    let latest_res = state
+        .http_client
+        .post(&state.clickhouse_url)
         .body(query_latest)
-        .send().await;
+        .send()
+        .await;
 
     let mut current_latency = 0.0;
     let mut current_distance = 0.0;
@@ -216,10 +222,20 @@ pub async fn anomaly_score_handler(
     let is_latency_outlier = std_dev > 0.0 && current_latency > (mean + 3.0 * std_dev);
     let is_distance_outlier = p99 > 0.0 && current_distance > p99;
     let is_outlier = is_latency_outlier || is_distance_outlier;
-    
-    let z_score = if std_dev > 0.0 { (current_latency - mean) / std_dev } else { 0.0 };
-    let mut anomaly_score = if z_score > 0.0 { 1.0 - (1.0 / (1.0 + z_score)) } else { 0.0 };
-    if is_distance_outlier { anomaly_score = 0.99; }
+
+    let z_score = if std_dev > 0.0 {
+        (current_latency - mean) / std_dev
+    } else {
+        0.0
+    };
+    let mut anomaly_score = if z_score > 0.0 {
+        1.0 - (1.0 / (1.0 + z_score))
+    } else {
+        0.0
+    };
+    if is_distance_outlier {
+        anomaly_score = 0.99;
+    }
 
     Json(AnomalyScore {
         anomaly_score,

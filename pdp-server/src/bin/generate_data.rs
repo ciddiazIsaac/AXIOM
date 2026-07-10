@@ -11,18 +11,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let start = std::time::Instant::now();
     let mut pipe = redis::pipe();
-    
+
     for i in 0..100_000 {
         let timestamp_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-            
+
         // Generate random-ish data
         let user_id = format!("did:axiom:test_{}", i % 100); // 100 different users
         let latency_ms = 40.0 + (i % 20) as f64; // baseline around 40-60ms
         let distance_km = (i % 10) as f64 * 5.0; // baseline distance 0-45km
-        
+
         let event = json!({
             "timestamp_ns": timestamp_ns,
             "session_id": format!("sess_{}", i),
@@ -43,16 +43,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         let event_str = event.to_string();
-        
-        pipe.xadd(stream, "*", &vec![("data", event_str)]);
-        
+
+        pipe.xadd(stream, "*", &[("data", event_str)]);
+
         // Execute pipeline every 1000 items
         if i % 1000 == 999 {
             let _: () = pipe.query_async(&mut con).await?;
             pipe = redis::pipe();
         }
     }
-    
+
     // Some outliers for testing
     let outlier_event = json!({
         "timestamp_ns": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         "latency_ms": 250.0 // Outlier latency
     });
-    
+
     let _: () = redis::cmd("XADD")
         .arg(stream)
         .arg("*")
