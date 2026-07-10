@@ -58,7 +58,7 @@ spec:
           name: p2p
         env:
         - name: REDIS_URL
-          value: "redis://redis:6379/"
+          value: "redis+sentinel://redis-sentinel:26379/mymaster/0"
         - name: CLICKHOUSE_URL
           value: "http://clickhouse:8123/"
         - name: PORT
@@ -92,6 +92,11 @@ spec:
             exec ./axiom-node
         - name: CRDT_DB_PATH
           value: "/data/crdt_bootstrap.db"
+        - name: ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: axiom-bootstrap-keys
+              key: ADMIN_TOKEN
         # ── Probes ────────────────────────────────────────────────────────
         # readiness: el bootnode entra en rotación (y los workers lo dializan)
         # solo cuando /metrics responde 200 — garantiza que el gossip network

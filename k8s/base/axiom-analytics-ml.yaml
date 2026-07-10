@@ -18,4 +18,4 @@ spec:
         imagePullPolicy: IfNotPresent
         env:
         - name: REDIS_URL
-          value: "redis://redis:6379/"
+          value: "redis://redis-master:6379/"

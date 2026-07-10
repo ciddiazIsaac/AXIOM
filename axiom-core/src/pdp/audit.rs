@@ -73,11 +73,36 @@ impl AuditSpooler {
                 .ok();
 
             // 2. Preparar el cliente de Redis
-            let client = redis::Client::open(redis_url).ok();
-            let mut redis_con = if let Some(c) = client {
-                redis::aio::ConnectionManager::new(c).await.ok()
+            let is_sentinel = redis_url.starts_with("redis+sentinel://");
+            let mut sentinel_client_opt = None;
+            let mut redis_client_opt = None;
+            
+            let mut redis_con = if is_sentinel {
+                let sentinel_url = redis_url.replace("redis+sentinel://", "redis://");
+                let parts: Vec<&str> = sentinel_url.split('/').collect();
+                let sentinel_node = parts[0];
+                let master_name = if parts.len() > 1 && !parts[1].is_empty() { parts[1] } else { "mymaster" };
+
+                if let Ok(mut sentinel_client) = redis::sentinel::SentinelClient::build(
+                    vec![format!("redis://{sentinel_node}")],
+                    master_name.to_string(),
+                    None,
+                    redis::sentinel::SentinelServerType::Master,
+                ) {
+                    let con = sentinel_client.get_async_connection().await.ok();
+                    sentinel_client_opt = Some(sentinel_client);
+                    con
+                } else {
+                    None
+                }
             } else {
-                None
+                if let Ok(redis_client) = redis::Client::open(redis_url.as_str()) {
+                    let con = redis_client.get_multiplexed_async_connection().await.ok();
+                    redis_client_opt = Some(redis_client);
+                    con
+                } else {
+                    None
+                }
             };
 
             // 3. Procesar eventos de la cola
@@ -91,7 +116,30 @@ impl AuditSpooler {
                             .xadd("axiom:audit:stream", "*", &[("data", &json_string)])
                             .await;
 
-                        if result.is_ok() {
+                        if let Err(e) = result {
+                            if e.is_connection_dropped() || e.is_io_error() {
+                                // Intentar reconectar una vez si la conexión se cae
+                                if let Some(sentinel) = sentinel_client_opt.as_mut() {
+                                    if let Ok(new_con) = sentinel.get_async_connection().await {
+                                        redis_con = Some(new_con);
+                                    }
+                                } else if let Some(client) = redis_client_opt.as_ref() {
+                                    if let Ok(new_con) = client.get_multiplexed_async_connection().await {
+                                        redis_con = Some(new_con);
+                                    }
+                                }
+                                
+                                // Reintentar xadd con la nueva conexión si tuvimos éxito
+                                if let Some(new_con) = &mut redis_con {
+                                    let retry_result: Result<(), redis::RedisError> = new_con
+                                        .xadd("axiom:audit:stream", "*", &[("data", &json_string)])
+                                        .await;
+                                    if retry_result.is_ok() {
+                                        sent_to_redis = true;
+                                    }
+                                }
+                            }
+                        } else {
                             sent_to_redis = true;
                         }
                     }

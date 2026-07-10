@@ -184,8 +184,33 @@ pub async fn run_ingestor() -> anyhow::Result<()> {
     info!("BATCH_SIZE={batch_size}, FLUSH_INTERVAL_MS={flush_interval_ms}");
 
     // ── Conectar a Redis ──────────────────────────────────────────────────────
-    let redis_client = redis::Client::open(redis_url.as_str())?;
-    let mut redis_con = redis_client.get_multiplexed_async_connection().await?;
+    // Parsear URL de sentinel manualmente o asumir "mymaster"
+    // Ejemplo: redis+sentinel://redis-sentinel:26379/mymaster/0
+    let is_sentinel = redis_url.starts_with("redis+sentinel://");
+    let mut sentinel_client_opt = None;
+    let mut redis_client_opt = None;
+    
+    let mut redis_con = if is_sentinel {
+        let sentinel_url = redis_url.replace("redis+sentinel://", "redis://");
+        let parts: Vec<&str> = sentinel_url.split('/').collect();
+        let sentinel_node = parts[0];
+        let master_name = if parts.len() > 1 && !parts[1].is_empty() { parts[1] } else { "mymaster" };
+
+        let mut sentinel_client = redis::sentinel::SentinelClient::build(
+            vec![format!("redis://{sentinel_node}")],
+            master_name.to_string(),
+            None,
+            redis::sentinel::SentinelServerType::Master,
+        )?;
+        let con = sentinel_client.get_async_connection().await?;
+        sentinel_client_opt = Some(sentinel_client);
+        con
+    } else {
+        let redis_client = redis::Client::open(redis_url.as_str())?;
+        let con = redis_client.get_multiplexed_async_connection().await?;
+        redis_client_opt = Some(redis_client);
+        con
+    };
 
     // Crear el consumer group si no existe (MKSTREAM crea el stream si tampoco existe)
     let group_result: redis::RedisResult<()> = redis::cmd("XGROUP")
@@ -235,6 +260,32 @@ pub async fn run_ingestor() -> anyhow::Result<()> {
             .arg(">") // Solo mensajes no entregados
             .query_async(&mut redis_con)
             .await;
+
+        match &results {
+            Err(e) if e.is_connection_dropped() || e.is_io_error() => {
+                warn!("Conexión con Redis perdida: {e}. Reconectando...");
+                let mut reconnected = false;
+                if let Some(sentinel) = sentinel_client_opt.as_mut() {
+                    if let Ok(con) = sentinel.get_async_connection().await {
+                        info!("Reconexión Sentinel exitosa.");
+                        redis_con = con;
+                        reconnected = true;
+                    }
+                } else if let Some(client) = redis_client_opt.as_ref() {
+                    if let Ok(con) = client.get_multiplexed_async_connection().await {
+                        info!("Reconexión Client exitosa.");
+                        redis_con = con;
+                        reconnected = true;
+                    }
+                }
+                
+                if !reconnected {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                continue;
+            }
+            _ => {}
+        }
 
         // Procesar los mensajes recibidos (puede ser 0 si expiró el BLOCK timeout)
         if let Ok(reply) = results {

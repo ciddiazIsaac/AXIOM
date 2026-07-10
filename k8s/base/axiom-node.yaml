@@ -61,7 +61,7 @@ spec:
           name: p2p
         env:
         - name: REDIS_URL
-          value: "redis://redis:6379/"
+          value: "redis+sentinel://redis-sentinel:26379/mymaster/0"
         - name: CLICKHOUSE_URL
           value: "http://clickhouse:8123/"
         - name: PORT
@@ -72,6 +72,11 @@ spec:
           # Apunta a los 3 bootnodes vía sus DNS predecibles del StatefulSet headless.
           # Si uno cae, los nodos se conectan automáticamente a los otros dos.
           value: "/dns4/axiom-bootstrap-0.axiom-bootstrap/tcp/4001,/dns4/axiom-bootstrap-1.axiom-bootstrap/tcp/4001,/dns4/axiom-bootstrap-2.axiom-bootstrap/tcp/4001"
+        - name: ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: axiom-bootstrap-keys
+              key: ADMIN_TOKEN
         # ── Probes ──────────────────────────────────────────────────────────
         # readiness: el pod entra en rotación solo cuando /metrics responde 200
         # (garantiza que el servidor HTTP, el PDP y el registry de métricas

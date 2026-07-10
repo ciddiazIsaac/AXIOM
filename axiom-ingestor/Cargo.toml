@@ -8,7 +8,7 @@ edition = "2021"
 tokio = { version = "1", features = ["full"] }
 
 # Redis Streams con soporte async
-redis = { version = "1.2", features = ["tokio-comp", "streams"] }
+redis = { version = "1.2", features = ["tokio-comp", "streams", "sentinel"] }
 
 # Cliente HTTP para ClickHouse (usamos la API HTTP nativa para máxima compatibilidad)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
