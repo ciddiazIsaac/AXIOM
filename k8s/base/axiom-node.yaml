@@ -31,7 +31,9 @@ spec:
         - name: P2P_LISTEN_ADDR
           value: "/ip4/0.0.0.0/tcp/4001"
         - name: P2P_DIAL_ADDRS
-          value: "/dns4/axiom-bootstrap/tcp/4001"
+          # Apunta a los 3 bootnodes vía sus DNS predecibles del StatefulSet headless.
+          # Si uno cae, los nodos se conectan automáticamente a los otros dos.
+          value: "/dns4/axiom-bootstrap-0.axiom-bootstrap/tcp/4001,/dns4/axiom-bootstrap-1.axiom-bootstrap/tcp/4001,/dns4/axiom-bootstrap-2.axiom-bootstrap/tcp/4001"
         volumeMounts:
         - name: data-volume
           mountPath: /data
