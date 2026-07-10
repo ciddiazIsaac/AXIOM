@@ -1,3 +1,4 @@
+#![allow(warnings)]
 //! Tests de integración: resolución local de DIDs sin red.
 
 use axiom_core::did::{AxiomDid, LocalResolver};
