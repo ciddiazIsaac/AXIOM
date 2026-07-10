@@ -83,7 +83,29 @@ pub async fn run_server() -> anyhow::Result<()> {
     let (tx_p2p, rx_p2p) = tokio::sync::mpsc::channel::<NodeCommand>(100);
     tokio::spawn(async move {
         info!("Iniciando Nodo P2P en {}", p2p_listen_addr);
-        let local_key = Keypair::generate_ed25519();
+
+        // Cargar identidad persistente desde AXIOM_P2P_SECRET_KEY (hex de 32 bytes).
+        // Si la variable no está presente, se genera una efímera y se loguea el
+        // valor para que pueda copiarse a un Secret de Kubernetes.
+        // Esto garantiza que los bootnodes conserven el mismo PeerId tras reinicios.
+        let local_key = if let Ok(hex_key) = std::env::var("AXIOM_P2P_SECRET_KEY") {
+            let mut bytes = hex::decode(&hex_key)
+                .expect("AXIOM_P2P_SECRET_KEY debe ser un string hex de 64 caracteres (32 bytes)");
+            libp2p::identity::Keypair::ed25519_from_bytes(&mut bytes)
+                .expect("Clave ed25519 inválida en AXIOM_P2P_SECRET_KEY")
+        } else {
+            let key = Keypair::generate_ed25519();
+            if let Ok(ed_key) = key.clone().try_into_ed25519() {
+                tracing::warn!("============================================================");
+                tracing::warn!("⚠️  ADVERTENCIA: No se encontró AXIOM_P2P_SECRET_KEY.");
+                tracing::warn!("Se ha generado una identidad EFÍMERA. PeerId cambiará al reiniciar.");
+                tracing::warn!("Para hacerla persistente, añade a tu Secret de K8s:");
+                tracing::warn!("AXIOM_P2P_SECRET_KEY={}", hex::encode(ed_key.secret().as_ref()));
+                tracing::warn!("============================================================");
+            }
+            key
+        };
+
         let crdt_db_path = std::env::var("CRDT_DB_PATH").unwrap_or_else(|_| {
             let fallback_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis().to_string();
             let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| fallback_id);
@@ -116,6 +138,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         };
         node.run_with_commands(rx_p2p).await;
     });
+
 
     // 4. Levantar el Servidor HTTP unificado
     // Obtener estados
