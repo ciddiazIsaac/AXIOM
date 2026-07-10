@@ -18,7 +18,7 @@ resources:
 images:
 - name: axiom-node
   newName: ghcr.io/ciddiazisaac/axiom-node
-  newTag: sha-8a81b5c4
+  newTag: sha-68a9c894
 
 configMapGenerator:
 - files:
