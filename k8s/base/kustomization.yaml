@@ -11,6 +11,15 @@ resources:
   - monitoring.yaml
   - backup-cronjob.yaml
 
+# ── Immutable image tags ───────────────────────────────────────────────────────
+# El CI sobreescribe newTag en cada push via:
+#   kustomize edit set image axiom-node=ghcr.io/OWNER/axiom-node:sha-${GITHUB_SHA::8}
+# Nunca se despliega :latest en producción.
+images:
+  - name: axiom-node
+    newName: ghcr.io/OWNER/axiom-node
+    newTag: latest   # Placeholder — sobreescrito por CI
+
 configMapGenerator:
   - name: clickhouse-init-config
     files:

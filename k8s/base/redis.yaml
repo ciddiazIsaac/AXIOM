@@ -110,6 +110,23 @@ spec:
             command: ["redis-cli", "ping"]
           initialDelaySeconds: 5
           periodSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          exec:
+            command: ["redis-cli", "ping"]
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          failureThreshold: 3
+        # Resources ajustados para Redis 7 con AOF habilitado.
+        # redis-0 (master) tiene más escrituras; redis-1/2 (replicas) menos.
+        # Un solo limit sirve los 3 pods — ajustar con VPA si el master satura.
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
       volumes:
       - name: redis-config
         emptyDir: {}
@@ -173,6 +190,28 @@ spec:
         ports:
         - containerPort: 26379
           name: sentinel
+        # readiness: el pod entra en rotación solo cuando el Sentinel acepta
+        # conexiones TCP (puede tardar mientras detecta al master inicial).
+        readinessProbe:
+          tcpSocket:
+            port: 26379
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 3
+        livenessProbe:
+          tcpSocket:
+            port: 26379
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          failureThreshold: 3
+        # Sentinel es muy liviano: solo heartbeats y failover ocasional.
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
         volumeMounts:
         - name: sentinel-config
           mountPath: /etc/redis

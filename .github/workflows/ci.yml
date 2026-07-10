@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Registry de imágenes: GitHub Container Registry (ghcr.io).
+  # Cambiar REGISTRY y IMAGE_NAME si usas Docker Hub u otro registry.
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/axiom-node
 
 jobs:
   build_and_test:
@@ -32,13 +36,69 @@ jobs:
       - name: Run Tests
         run: cargo test --all
 
-  docker_build:
-    name: Build Docker Image
+  # ── Publicación de imagen con tag inmutable ──────────────────────────────────
+  # Solo corre en push a main (no en PRs) para no publicar imágenes de ramas.
+  # Genera el tag sha-XXXXXXXX (primeros 8 chars del SHA de git) y lo inyecta
+  # en kustomization.yaml via `kustomize edit set image`, luego hace commit.
+  # El tag :latest NUNCA se despliega en producción.
+  publish_and_update_manifests:
+    name: Publish Image & Update Manifests
     runs-on: ubuntu-latest
     needs: build_and_test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write        # Para hacer commit del kustomization.yaml actualizado
+      packages: write        # Para hacer push a ghcr.io
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Necesitamos el historial para poder hacer git commit + push
+          fetch-depth: 0
 
-      - name: Build Docker Image (Distroless)
-        run: docker build -t axiom-node:latest .
+      - name: Compute image tag
+        id: tag
+        run: |
+          SHORT_SHA="${GITHUB_SHA::8}"
+          echo "IMAGE_TAG=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "FULL_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          # Publica el tag inmutable sha-XXXXXXXX.
+          # También publica :latest como referencia humana (NO se usa en los manifiestos).
+          tags: |
+            ${{ steps.tag.outputs.FULL_IMAGE }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Install kustomize
+        run: |
+          curl -sL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Update kustomization.yaml with immutable tag
+        run: |
+          cd k8s/base
+          kustomize edit set image \
+            axiom-node=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.IMAGE_TAG }}
+          echo "✅ kustomization.yaml actualizado con tag: ${{ steps.tag.outputs.IMAGE_TAG }}"
+          cat kustomization.yaml
+
+      - name: Commit and push updated manifests
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/base/kustomization.yaml
+          git commit -m "ci: update axiom-node image tag to ${{ steps.tag.outputs.IMAGE_TAG }} [skip ci]"
+          git push

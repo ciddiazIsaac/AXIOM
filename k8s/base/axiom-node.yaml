@@ -1,3 +1,40 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# axiom-node — Deployment (workers stateless)
+#
+# DECISIÓN DE PERSISTENCIA DEL CRDT — ver ADR-005
+#   Este Deployment usa emptyDir para /data. El estado CRDT del nodo worker
+#   NO se persiste en disco entre reinicios. Esto es una decisión de diseño
+#   explícita, NO un descuido. Evidencia en el código:
+#
+#   1. axiom-p2p/src/node.rs:84
+#        needs_sync: true   // seteado en cada arranque del nodo
+#
+#   2. axiom-p2p/src/node.rs:189 (evento mDNS) y :211 (evento Identify):
+#        if self.needs_sync { self.request_full_sync(); }
+#      request_full_sync() publica GossipPayload::SyncRequest al topic
+#      "axiom/revocations/1.0.0"; cualquier bootnode responde con SyncResponse
+#      (el estado completo Automerge serializado). Cuando merge_full() termina,
+#      needs_sync = false.
+#
+#   3. El estado autoritativo vive en los StatefulSets con PVC:
+#        axiom-bootstrap (3 réplicas × 1 Gi PVC, CRDT_DB_PATH=/data/crdt_bootstrap.db)
+#      Los workers son clientes de ese estado; perder el cache local solo
+#      impone el tiempo de un SyncRequest/SyncResponse al arrancar.
+#
+#   4. Los axiom-node son stateless por diseño de rol: no necesitan PeerId
+#      estable (los bootnodes sí, por eso están en StatefulSet). El comando
+#      `kubectl scale deployment axiom-node --replicas=N` escala sin fricción.
+#
+#   CONDICIÓN DE REVISIÓN: si el tiempo de resync supera el SLA de arranque
+#   establecido en ADR-005 (por crecimiento del dataset de revocaciones), hay
+#   que medir el tamaño de save_full() y evaluar migración a StatefulSet+PVC.
+#
+# IMAGEN:
+#   El tag se inyecta desde el CI via:
+#     kustomize edit set image axiom-node=ghcr.io/OWNER/axiom-node:sha-XXXXXXXX
+#   El campo `image: axiom-node` es el selector que kustomization.yaml intercepta.
+#   Nunca se despliega :latest en producción.
+# ──────────────────────────────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,6 +51,7 @@ spec:
     spec:
       containers:
       - name: axiom-node
+        # Kustomize reemplaza este tag con sha-XXXXXXXX via `images:` en kustomization.yaml
         image: axiom-node:latest
         imagePullPolicy: IfNotPresent
         ports:
@@ -34,9 +72,42 @@ spec:
           # Apunta a los 3 bootnodes vía sus DNS predecibles del StatefulSet headless.
           # Si uno cae, los nodos se conectan automáticamente a los otros dos.
           value: "/dns4/axiom-bootstrap-0.axiom-bootstrap/tcp/4001,/dns4/axiom-bootstrap-1.axiom-bootstrap/tcp/4001,/dns4/axiom-bootstrap-2.axiom-bootstrap/tcp/4001"
+        # ── Probes ──────────────────────────────────────────────────────────
+        # readiness: el pod entra en rotación solo cuando /metrics responde 200
+        # (garantiza que el servidor HTTP, el PDP y el registry de métricas
+        # estén inicializados antes de recibir tráfico real).
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 3
+          successThreshold: 1
+        # liveness: reinicia el pod si /health deja de responder 200
+        # (detecta deadlocks o panics en el runtime de Tokio).
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          failureThreshold: 3
+        # ── Resources ───────────────────────────────────────────────────────
+        # Basado en: binary Rust async Tokio, carga objetivo 1k RPS, PDP evalúa
+        # políticas Rego (~1ms/req), propagación P2P gossipsub liviana.
+        # Ajustar con `kubectl top pods` + VPA tras el primer load test en staging.
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
         volumeMounts:
         - name: data-volume
           mountPath: /data
       volumes:
       - name: data-volume
+        # emptyDir intencional — ver nota de persistencia del CRDT al inicio del archivo.
         emptyDir: {}

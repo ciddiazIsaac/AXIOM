@@ -1,3 +1,13 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# axiom-bootstrap — StatefulSet (bootnodes con estado CRDT persistente en PVC)
+#
+# IMAGEN:
+#   Usa el mismo binario que axiom-node (image: axiom-node).
+#   El tag se inyecta desde el CI via:
+#     kustomize edit set image axiom-node=ghcr.io/OWNER/axiom-node:sha-XXXXXXXX
+#   Nunca se despliega :latest en producción.
+# ──────────────────────────────────────────────────────────────────────────────
+#
 # Headless Service que asigna DNS predecibles a cada réplica del StatefulSet:
 #   axiom-bootstrap-0.axiom-bootstrap.default.svc.cluster.local
 #   axiom-bootstrap-1.axiom-bootstrap.default.svc.cluster.local
@@ -38,6 +48,7 @@ spec:
     spec:
       containers:
       - name: axiom-bootstrap
+        # Kustomize reemplaza este tag con sha-XXXXXXXX via `images:` en kustomization.yaml
         image: axiom-node:latest
         imagePullPolicy: IfNotPresent
         ports:
@@ -81,6 +92,37 @@ spec:
             exec ./axiom-node
         - name: CRDT_DB_PATH
           value: "/data/crdt_bootstrap.db"
+        # ── Probes ────────────────────────────────────────────────────────
+        # readiness: el bootnode entra en rotación (y los workers lo dializan)
+        # solo cuando /metrics responde 200 — garantiza que el gossip network
+        # esté listo antes de recibir conexiones de otros peers.
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 3
+          successThreshold: 1
+        # liveness: reinicia el pod si /health deja de responder
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          failureThreshold: 3
+        # ── Resources ─────────────────────────────────────────────────────
+        # Bootnodes reciben principalmente tráfico P2P gossip + algunas
+        # queries HTTP de los workers. CPU más bajo que axiom-node (no evalúan
+        # Rego directamente), memoria comparable por el estado CRDT en RAM.
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
         volumeMounts:
         - name: data-volume
           mountPath: /data

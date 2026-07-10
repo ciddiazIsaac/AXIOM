@@ -97,6 +97,29 @@ spec:
           name: client
         - containerPort: 9234
           name: raft
+        # readiness: el Keeper está listo cuando acepta conexiones TCP en el
+        # puerto de client Raft. El cluster no debe recibir escrituras hasta
+        # que los 3 Keepers formen quorum.
+        readinessProbe:
+          tcpSocket:
+            port: 9181
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 3
+        livenessProbe:
+          tcpSocket:
+            port: 9181
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          failureThreshold: 3
+        # Keeper gestiona solo metadatos Raft, no datos de usuario.
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
         volumeMounts:
         - name: keeper-config
           mountPath: /etc/clickhouse-keeper
@@ -229,6 +252,26 @@ spec:
             port: 8123
           initialDelaySeconds: 10
           periodSeconds: 5
+          failureThreshold: 3
+        # liveness igual al readiness: si /ping falla, el pod está bloqueado.
+        livenessProbe:
+          httpGet:
+            path: /ping
+            port: 8123
+          initialDelaySeconds: 30
+          periodSeconds: 20
+          failureThreshold: 3
+        # ClickHouse es el componente más hambriento de recursos:
+        # columnar merges, compresiones LZ4/ZSTD, queries analíticas.
+        # 1Gi request permite que el scheduler lo coloque en nodos adecuados;
+        # 4Gi limit da margen para merges grandes sin OOM.
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2000m"
+            memory: "4Gi"
         volumeMounts:
         - name: clickhouse-data
           mountPath: /var/lib/clickhouse
