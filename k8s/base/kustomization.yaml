@@ -2,25 +2,25 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - bootstrap-secrets.yaml
-  - redis.yaml
-  - clickhouse.yaml
-  - axiom-bootstrap.yaml
-  - axiom-node.yaml
-  - axiom-analytics-ml.yaml
-  - monitoring.yaml
-  - backup-cronjob.yaml
+- bootstrap-secrets.yaml
+- redis.yaml
+- clickhouse.yaml
+- axiom-bootstrap.yaml
+- axiom-node.yaml
+- axiom-analytics-ml.yaml
+- monitoring.yaml
+- backup-cronjob.yaml
 
 # ── Immutable image tags ───────────────────────────────────────────────────────
 # El CI sobreescribe newTag en cada push via:
 #   kustomize edit set image axiom-node=ghcr.io/OWNER/axiom-node:sha-${GITHUB_SHA::8}
 # Nunca se despliega :latest en producción.
 images:
-  - name: axiom-node
-    newName: ghcr.io/OWNER/axiom-node
-    newTag: latest   # Placeholder — sobreescrito por CI
+- name: axiom-node
+  newName: ghcr.io/ciddiazisaac/axiom-node
+  newTag: sha-8a81b5c4
 
 configMapGenerator:
-  - name: clickhouse-init-config
-    files:
-      - init.sql=../../clickhouse/init.sql
+- files:
+  - init.sql=../../clickhouse/init.sql
+  name: clickhouse-init-config
