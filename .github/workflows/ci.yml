@@ -9,9 +9,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # Registry de imágenes: GitHub Container Registry (ghcr.io).
-  # Cambiar REGISTRY y IMAGE_NAME si usas Docker Hub u otro registry.
+  # Cambiar REGISTRY si usas Docker Hub u otro registry.
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/axiom-node
 
 jobs:
   build_and_test:
@@ -57,12 +56,18 @@ jobs:
           # Necesitamos el historial para poder hacer git commit + push
           fetch-depth: 0
 
+      - name: Compute lowercase image name
+        id: image
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME=${OWNER_LC}/axiom-node" >> "$GITHUB_OUTPUT"
+
       - name: Compute image tag
         id: tag
         run: |
           SHORT_SHA="${GITHUB_SHA::8}"
           echo "IMAGE_TAG=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "FULL_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "FULL_IMAGE=${{ env.REGISTRY }}/${{ steps.image.outputs.IMAGE_NAME }}:sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -80,7 +85,7 @@ jobs:
           # También publica :latest como referencia humana (NO se usa en los manifiestos).
           tags: |
             ${{ steps.tag.outputs.FULL_IMAGE }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.IMAGE_NAME }}:latest
 
       - name: Install kustomize
         run: |
@@ -91,7 +96,7 @@ jobs:
         run: |
           cd k8s/base
           kustomize edit set image \
-            axiom-node=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.IMAGE_TAG }}
+            axiom-node=${{ env.REGISTRY }}/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.tag.outputs.IMAGE_TAG }}
           echo "✅ kustomization.yaml actualizado con tag: ${{ steps.tag.outputs.IMAGE_TAG }}"
           cat kustomization.yaml
 
