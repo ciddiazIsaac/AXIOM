@@ -37,3 +37,25 @@ AS SELECT
 FROM audit_events
 GROUP BY user_did, window_start;
 
+-- Tabla agregada para intentos de login por minuto por usuario
+CREATE TABLE IF NOT EXISTS login_attempts_1m (
+    user_did      String,
+    window_start  DateTime,
+    allow_count   AggregateFunction(count, String),
+    deny_count    AggregateFunction(count, String),
+    challenge_count AggregateFunction(count, String)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(window_start)
+ORDER BY (user_did, window_start);
+
+-- Vista Materializada que puebla la tabla de intentos de login
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_login_attempts_1m
+TO login_attempts_1m
+AS SELECT
+    user_did,
+    toStartOfMinute(created_at) AS window_start,
+    countState(multiIf(decision = 'ALLOW', '1', NULL)) AS allow_count,
+    countState(multiIf(decision = 'DENY', '1', NULL)) AS deny_count,
+    countState(multiIf(decision = 'CHALLENGE', '1', NULL)) AS challenge_count
+FROM audit_events
+GROUP BY user_did, window_start;
