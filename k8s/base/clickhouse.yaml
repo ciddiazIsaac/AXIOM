@@ -1,3 +1,126 @@
+# ClickHouse HA con ClickHouse Keeper (replicación 2 shards)
+#
+# Arquitectura:
+#   - 3 pods ClickHouse Keeper (quorum distribuido, reemplaza ZooKeeper)
+#   - 2 pods ClickHouse Server con replicación entre ellos
+#   - Un ConfigMap con la configuración de cluster y macros por pod
+#
+# Los datos escritos en el shard-1 se replican automáticamente al shard-2
+# usando las tablas ReplicatedMergeTree de ClickHouse.
+
+# ─── 1. Headless Service para Keeper ─────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse-keeper
+  labels:
+    app: clickhouse-keeper
+spec:
+  clusterIP: None
+  ports:
+    - port: 9181
+      name: client
+    - port: 9234
+      name: raft
+  selector:
+    app: clickhouse-keeper
+
+---
+# ─── 2. ConfigMap: configuración de Keeper ───────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-keeper-config
+data:
+  keeper_config.xml: |
+    <clickhouse>
+      <keeper_server>
+        <tcp_port>9181</tcp_port>
+        <server_id from_env="KEEPER_ID"/>
+        <log_storage_path>/var/lib/clickhouse-keeper/log</log_storage_path>
+        <snapshot_storage_path>/var/lib/clickhouse-keeper/snapshots</snapshot_storage_path>
+        <raft_configuration>
+          <server>
+            <id>1</id>
+            <hostname>clickhouse-keeper-0.clickhouse-keeper</hostname>
+            <port>9234</port>
+          </server>
+          <server>
+            <id>2</id>
+            <hostname>clickhouse-keeper-1.clickhouse-keeper</hostname>
+            <port>9234</port>
+          </server>
+          <server>
+            <id>3</id>
+            <hostname>clickhouse-keeper-2.clickhouse-keeper</hostname>
+            <port>9234</port>
+          </server>
+        </raft_configuration>
+      </keeper_server>
+    </clickhouse>
+
+---
+# ─── 3. StatefulSet: 3 réplicas del Keeper (quorum Raft) ─────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse-keeper
+spec:
+  serviceName: clickhouse-keeper
+  replicas: 3
+  selector:
+    matchLabels:
+      app: clickhouse-keeper
+  template:
+    metadata:
+      labels:
+        app: clickhouse-keeper
+    spec:
+      initContainers:
+      # Asigna el KEEPER_ID (1-indexed) según el índice del pod (0-indexed)
+      - name: set-keeper-id
+        image: busybox
+        command: ["sh", "-c", "echo $((${HOSTNAME##*-} + 1)) > /tmp/keeper_id"]
+        volumeMounts:
+        - name: keeper-id
+          mountPath: /tmp
+      containers:
+      - name: clickhouse-keeper
+        image: clickhouse/clickhouse-keeper:23.8
+        env:
+        - name: KEEPER_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        ports:
+        - containerPort: 9181
+          name: client
+        - containerPort: 9234
+          name: raft
+        volumeMounts:
+        - name: keeper-config
+          mountPath: /etc/clickhouse-keeper
+        - name: keeper-data
+          mountPath: /var/lib/clickhouse-keeper
+        - name: keeper-id
+          mountPath: /tmp
+      volumes:
+      - name: keeper-config
+        configMap:
+          name: clickhouse-keeper-config
+      - name: keeper-id
+        emptyDir: {}
+  volumeClaimTemplates:
+  - metadata:
+      name: keeper-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 2Gi
+
+---
+# ─── 4. Headless Service para ClickHouse Server ───────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
@@ -5,6 +128,7 @@ metadata:
   labels:
     app: clickhouse
 spec:
+  clusterIP: None
   ports:
     - port: 8123
       name: http
@@ -12,14 +136,59 @@ spec:
       name: tcp
   selector:
     app: clickhouse
+
 ---
+# ─── 5. ConfigMap: config de cluster para ClickHouse Server ──────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-cluster-config
+data:
+  cluster.xml: |
+    <clickhouse>
+      <remote_servers>
+        <axiom_cluster>
+          <shard>
+            <replica>
+              <host>clickhouse-0.clickhouse</host>
+              <port>9000</port>
+            </replica>
+            <replica>
+              <host>clickhouse-1.clickhouse</host>
+              <port>9000</port>
+            </replica>
+          </shard>
+        </axiom_cluster>
+      </remote_servers>
+      <zookeeper>
+        <node>
+          <host>clickhouse-keeper-0.clickhouse-keeper</host>
+          <port>9181</port>
+        </node>
+        <node>
+          <host>clickhouse-keeper-1.clickhouse-keeper</host>
+          <port>9181</port>
+        </node>
+        <node>
+          <host>clickhouse-keeper-2.clickhouse-keeper</host>
+          <port>9181</port>
+        </node>
+      </zookeeper>
+      <macros>
+        <shard from_env="CH_SHARD"/>
+        <replica from_env="CH_REPLICA"/>
+      </macros>
+    </clickhouse>
+
+---
+# ─── 6. StatefulSet: 2 réplicas de ClickHouse Server ─────────────────────────
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: clickhouse
 spec:
-  serviceName: "clickhouse"
-  replicas: 1
+  serviceName: clickhouse
+  replicas: 2
   selector:
     matchLabels:
       app: clickhouse
@@ -28,23 +197,52 @@ spec:
       labels:
         app: clickhouse
     spec:
+      initContainers:
+      # Carga el init.sql una sola vez si la DB aún no existe
+      - name: init-db
+        image: clickhouse/clickhouse-server:23.8-alpine
+        command: ["sh", "-c"]
+        args:
+          - |
+            until clickhouse-client --host 127.0.0.1 --query "SELECT 1" 2>/dev/null; do
+              echo "Esperando a que ClickHouse arranque..."; sleep 2;
+            done
+            clickhouse-client --host 127.0.0.1 --multiquery < /docker-entrypoint-initdb.d/init.sql || true
       containers:
       - name: clickhouse
         image: clickhouse/clickhouse-server:23.8-alpine
+        env:
+        - name: CH_SHARD
+          value: "1"
+        - name: CH_REPLICA
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name   # clickhouse-0 o clickhouse-1
         ports:
         - containerPort: 8123
           name: http
         - containerPort: 9000
           name: tcp
+        readinessProbe:
+          httpGet:
+            path: /ping
+            port: 8123
+          initialDelaySeconds: 10
+          periodSeconds: 5
         volumeMounts:
         - name: clickhouse-data
           mountPath: /var/lib/clickhouse
         - name: clickhouse-init
           mountPath: /docker-entrypoint-initdb.d
+        - name: clickhouse-cluster-config
+          mountPath: /etc/clickhouse-server/config.d
       volumes:
       - name: clickhouse-init
         configMap:
           name: clickhouse-init-config
+      - name: clickhouse-cluster-config
+        configMap:
+          name: clickhouse-cluster-config
   volumeClaimTemplates:
   - metadata:
       name: clickhouse-data
@@ -52,4 +250,4 @@ spec:
       accessModes: [ "ReadWriteOnce" ]
       resources:
         requests:
-          storage: 10Gi
+          storage: 20Gi
