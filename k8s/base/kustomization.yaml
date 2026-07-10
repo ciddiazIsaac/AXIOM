@@ -9,6 +9,7 @@ resources:
   - axiom-node.yaml
   - axiom-analytics-ml.yaml
   - monitoring.yaml
+  - backup-cronjob.yaml
 
 configMapGenerator:
   - name: clickhouse-init-config

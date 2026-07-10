@@ -1,0 +1,131 @@
+# Política Automatizada de Backups y Disaster Recovery
+#
+# Dos CronJobs independientes:
+#   1. redis-backup    — ejecuta BGSAVE + copia el dump.rdb a un volumen de backup
+#   2. clickhouse-backup — usa clickhouse-backup para exportar tablas críticas a un volumen
+#
+# En producción, el volumen de backup debe ser un almacenamiento remoto:
+#   - AWS S3 (usar aws-cli en el container)
+#   - GCP GCS (usar gsutil)
+#   - Azure Blob Storage
+# Aquí usamos un PVC separado como destino de los snapshots para un entorno K8s puro.
+
+# ─── PVC compartido de backups ────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-storage
+spec:
+  accessModes: [ "ReadWriteMany" ]
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# ─── CronJob 1: Redis BGSAVE → /backups/redis/ ───────────────────────────────
+# Ejecuta cada día a las 02:00 UTC.
+# Triggers BGSAVE en el master y copia el dump resultante al PVC de backups.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redis-backup
+spec:
+  schedule: "0 2 * * *"   # Diariamente a las 02:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: redis-backup
+            image: redis:7.2-alpine
+            command: ["sh", "-c"]
+            args:
+              - |
+                set -e
+                TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+                DEST=/backups/redis
+
+                echo "=== Iniciando backup de Redis: ${TIMESTAMP} ==="
+                mkdir -p ${DEST}
+
+                # Trigger BGSAVE bloqueante en el master
+                redis-cli -h redis-0.redis-headless BGSAVE
+                until [ "$(redis-cli -h redis-0.redis-headless LASTSAVE)" != "$(redis-cli -h redis-0.redis-headless LASTSAVE)" ]; do
+                  sleep 1
+                done
+
+                # Copiar el dump al volumen de backups con timestamp
+                cp /data/dump.rdb ${DEST}/dump_${TIMESTAMP}.rdb
+
+                # Retener solo los últimos 7 backups
+                ls -t ${DEST}/dump_*.rdb | tail -n +8 | xargs rm -f
+
+                echo "=== Backup Redis completado: ${DEST}/dump_${TIMESTAMP}.rdb ==="
+            volumeMounts:
+            - name: redis-data
+              mountPath: /data
+              readOnly: true
+            - name: backup-storage
+              mountPath: /backups
+          volumes:
+          - name: redis-data
+            persistentVolumeClaim:
+              claimName: redis-redis-data-0   # PVC generado por el StatefulSet
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-storage
+
+---
+# ─── CronJob 2: ClickHouse Backup → /backups/clickhouse/ ─────────────────────
+# Ejecuta cada día a las 03:00 UTC (escalonado con Redis para no sobrecargar I/O).
+# Usa BACKUP TABLE para exportar las tablas críticas.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: clickhouse-backup
+spec:
+  schedule: "0 3 * * *"   # Diariamente a las 03:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: clickhouse-backup
+            image: clickhouse/clickhouse-server:23.8-alpine
+            command: ["sh", "-c"]
+            args:
+              - |
+                set -e
+                TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+                DEST=/backups/clickhouse/${TIMESTAMP}
+
+                echo "=== Iniciando backup de ClickHouse: ${TIMESTAMP} ==="
+                mkdir -p ${DEST}
+
+                # Backup de cada tabla crítica usando BACKUP TABLE nativo de ClickHouse
+                for TABLE in audit_events audit_events_1m login_attempts_1m; do
+                  echo "  Exportando tabla: ${TABLE}..."
+                  clickhouse-client \
+                    --host clickhouse-0.clickhouse \
+                    --query "BACKUP TABLE default.${TABLE} TO File('${DEST}/${TABLE}.backup')"
+                done
+
+                # Retener solo los últimos 7 backups
+                ls -dt /backups/clickhouse/*/ | tail -n +8 | xargs rm -rf
+
+                echo "=== Backup ClickHouse completado en: ${DEST} ==="
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backups
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-storage
