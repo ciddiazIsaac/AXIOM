@@ -18,27 +18,23 @@ COPY regorus-local ./regorus-local
 # Compilar en modo release
 RUN cargo build --release -p axiom-node
 
-# Etapa 2: Imagen mínima
-FROM debian:bookworm-slim
+# Etapa 2: Imagen mínima distroless
+FROM gcr.io/distroless/cc-debian12
 
-# Instalar certificados y dependencias dinámicas comunes
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /usr/local/bin
+WORKDIR /app
 
 # Copiar binario compilado de la etapa builder
 COPY --from=builder /usr/src/app/target/release/axiom-node .
 
 # Copiar políticas de Rego si existen o se leen relativas
 # El código asume "../axiom-core/policies/zero_trust.rego", vamos a replicar esa estructura.
-RUN mkdir -p /usr/local/axiom-core/policies
-COPY axiom-core/policies/zero_trust.rego /usr/local/axiom-core/policies/
+# En distroless no hay `mkdir`, pero Docker COPY crea las carpetas si no existen.
+COPY axiom-core/policies/zero_trust.rego /axiom-core/policies/
 
 # Copiar el frontend compilado
-RUN mkdir -p /usr/local/frontend/dist
-COPY frontend/dist /usr/local/frontend/dist
+COPY frontend/dist /app/frontend/dist
 
-# Exponer el puerto del servidor HTTP y P2P (asumiendo que P2P escucha en algún lado)
+# Exponer el puerto del servidor HTTP y P2P
 EXPOSE 3000
 
 ENV PORT=3000
