@@ -41,8 +41,8 @@ pub async fn run_server() -> anyhow::Result<()> {
     info!("Iniciando AXIOM Node - El Contenedor y la Integración");
 
     // Leer tokens críticos al inicio (falla rápido si no existen)
-    let admin_token = std::env::var("ADMIN_TOKEN")
-        .expect("Falta la variable de entorno obligatoria ADMIN_TOKEN");
+    let admin_token =
+        std::env::var("ADMIN_TOKEN").expect("Falta la variable de entorno obligatoria ADMIN_TOKEN");
 
     // 1. Inicializar métricas Prometheus
     let mut registry = Registry::default();

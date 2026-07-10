@@ -189,12 +189,16 @@ pub async fn run_ingestor() -> anyhow::Result<()> {
     let is_sentinel = redis_url.starts_with("redis+sentinel://");
     let mut sentinel_client_opt = None;
     let mut redis_client_opt = None;
-    
+
     let mut redis_con = if is_sentinel {
         let sentinel_url = redis_url.replace("redis+sentinel://", "redis://");
         let parts: Vec<&str> = sentinel_url.split('/').collect();
         let sentinel_node = parts[0];
-        let master_name = if parts.len() > 1 && !parts[1].is_empty() { parts[1] } else { "mymaster" };
+        let master_name = if parts.len() > 1 && !parts[1].is_empty() {
+            parts[1]
+        } else {
+            "mymaster"
+        };
 
         let mut sentinel_client = redis::sentinel::SentinelClient::build(
             vec![format!("redis://{sentinel_node}")],
@@ -278,7 +282,7 @@ pub async fn run_ingestor() -> anyhow::Result<()> {
                         reconnected = true;
                     }
                 }
-                
+
                 if !reconnected {
                     tokio::time::sleep(Duration::from_secs(2)).await;
                 }

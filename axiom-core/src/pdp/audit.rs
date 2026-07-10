@@ -76,12 +76,16 @@ impl AuditSpooler {
             let is_sentinel = redis_url.starts_with("redis+sentinel://");
             let mut sentinel_client_opt = None;
             let mut redis_client_opt = None;
-            
+
             let mut redis_con = if is_sentinel {
                 let sentinel_url = redis_url.replace("redis+sentinel://", "redis://");
                 let parts: Vec<&str> = sentinel_url.split('/').collect();
                 let sentinel_node = parts[0];
-                let master_name = if parts.len() > 1 && !parts[1].is_empty() { parts[1] } else { "mymaster" };
+                let master_name = if parts.len() > 1 && !parts[1].is_empty() {
+                    parts[1]
+                } else {
+                    "mymaster"
+                };
 
                 if let Ok(mut sentinel_client) = redis::sentinel::SentinelClient::build(
                     vec![format!("redis://{sentinel_node}")],
@@ -124,11 +128,13 @@ impl AuditSpooler {
                                         redis_con = Some(new_con);
                                     }
                                 } else if let Some(client) = redis_client_opt.as_ref() {
-                                    if let Ok(new_con) = client.get_multiplexed_async_connection().await {
+                                    if let Ok(new_con) =
+                                        client.get_multiplexed_async_connection().await
+                                    {
                                         redis_con = Some(new_con);
                                     }
                                 }
-                                
+
                                 // Reintentar xadd con la nueva conexión si tuvimos éxito
                                 if let Some(new_con) = &mut redis_con {
                                     let retry_result: Result<(), redis::RedisError> = new_con
