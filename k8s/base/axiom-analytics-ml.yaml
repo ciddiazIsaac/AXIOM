@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axiom-analytics-ml
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: axiom-analytics-ml
+  template:
+    metadata:
+      labels:
+        app: axiom-analytics-ml
+    spec:
+      containers:
+      - name: axiom-analytics-ml
+        image: axiom-analytics-ml:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: REDIS_URL
+          value: "redis://redis:6379/"

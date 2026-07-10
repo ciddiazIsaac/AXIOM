@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  labels:
+    app: clickhouse
+spec:
+  ports:
+    - port: 8123
+      name: http
+    - port: 9000
+      name: tcp
+  selector:
+    app: clickhouse
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+spec:
+  serviceName: "clickhouse"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      containers:
+      - name: clickhouse
+        image: clickhouse/clickhouse-server:23.8-alpine
+        ports:
+        - containerPort: 8123
+          name: http
+        - containerPort: 9000
+          name: tcp
+        volumeMounts:
+        - name: clickhouse-data
+          mountPath: /var/lib/clickhouse
+        - name: clickhouse-init
+          mountPath: /docker-entrypoint-initdb.d
+      volumes:
+      - name: clickhouse-init
+        configMap:
+          name: clickhouse-init-config
+  volumeClaimTemplates:
+  - metadata:
+      name: clickhouse-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi

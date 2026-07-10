@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - redis.yaml
+  - clickhouse.yaml
+  - axiom-bootstrap.yaml
+  - axiom-node.yaml
+  - axiom-analytics-ml.yaml
+  - monitoring.yaml
+
+configMapGenerator:
+  - name: clickhouse-init-config
+    files:
+      - init.sql=../../clickhouse/init.sql

@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axiom-node
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: axiom-node
+  template:
+    metadata:
+      labels:
+        app: axiom-node
+    spec:
+      containers:
+      - name: axiom-node
+        image: axiom-node:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 4001
+          name: p2p
+        env:
+        - name: REDIS_URL
+          value: "redis://redis:6379/"
+        - name: CLICKHOUSE_URL
+          value: "http://clickhouse:8123/"
+        - name: PORT
+          value: "3000"
+        - name: P2P_LISTEN_ADDR
+          value: "/ip4/0.0.0.0/tcp/4001"
+        - name: P2P_DIAL_ADDRS
+          value: "/dns4/axiom-bootstrap/tcp/4001"
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+      volumes:
+      - name: data-volume
+        emptyDir: {}
