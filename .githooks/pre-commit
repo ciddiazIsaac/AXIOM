@@ -1,0 +1,11 @@
+#!/bin/sh
+# Pre-commit hook: garantiza que el código esté formateado antes de cada commit.
+# Instalar: ya está en .git/hooks/pre-commit (copia automática desde .githooks/)
+
+cargo fmt --all -- --check
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "❌ El código no está formateado. Corre 'cargo fmt --all' antes de commitear."
+    echo ""
+    exit 1
+fi
