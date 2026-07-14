@@ -7,7 +7,7 @@ edition = "2021"
 axiom-core = { path = "../axiom-core" }
 automerge = "0.10"
 futures = "0.3.32"
-libp2p = { version = "0.54", features = ["tokio", "tcp", "noise", "yamux", "ed25519", "mdns", "kad", "identify", "gossipsub", "ping", "macros"] }
+libp2p = { version = "0.56", features = ["tokio", "tcp", "noise", "yamux", "ed25519", "mdns", "kad", "identify", "gossipsub", "ping", "macros"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.0", features = ["full"] }

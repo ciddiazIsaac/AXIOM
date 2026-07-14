@@ -1,0 +1,23 @@
+# audit.toml — Excepciones documentadas para cargo audit
+
+[advisories]
+ignore = [
+    # hickory-proto (transitivo vía libp2p-mdns).
+    # Actualizado a 0.25.2 con el bump de libp2p a 0.56, pero el fix exige >=0.26.1.
+    # libp2p-mdns v0.48.0 todavía usa hickory-proto = "0.25".
+    # Riesgo: CPU exhaustion (O(n^2) compresión DNS). Medio.
+    # Revisar en Q4 o cuando libp2p suba a hickory-proto 0.26.
+    "RUSTSEC-2026-0119",
+
+    # paste: sin mantenedor, pero es solo un macro crate y no tiene CVEs de ejecución.
+    # Entra transitivamente por netlink-packet-core en target all.
+    # Sin reemplazo directo a nivel de nuestras dependencias.
+    "RUSTSEC-2024-0436",
+
+    # pqcrypto-* warnings de mantenimiento.
+    # Reemplazo por pqcrypto-mlkem pendiente de refactor arquitectónico
+    # en un ticket separado (fuera del scope actual de security gate).
+    "RUSTSEC-2026-0163", # pqcrypto-internals
+    "RUSTSEC-2024-0381", # pqcrypto-kyber
+    "RUSTSEC-2026-0162", # pqcrypto-traits
+]
