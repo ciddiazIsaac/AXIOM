@@ -10,6 +10,7 @@ resources:
 - axiom-analytics-ml.yaml
 - monitoring.yaml
 - backup-cronjob.yaml
+- network-policy.yaml
 
 # ── Immutable image tags ───────────────────────────────────────────────────────
 # El CI sobreescribe newTag en cada push via:

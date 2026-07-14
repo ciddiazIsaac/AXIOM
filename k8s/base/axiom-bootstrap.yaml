@@ -46,28 +46,30 @@ spec:
       labels:
         app: axiom-bootstrap
     spec:
-      containers:
-      - name: axiom-bootstrap
-        # Kustomize reemplaza este tag con sha-XXXXXXXX via `images:` en kustomization.yaml
-        image: axiom-node:latest
-        imagePullPolicy: IfNotPresent
-        ports:
-        - containerPort: 3000
-          name: http
-        - containerPort: 4001
-          name: p2p
+      # ── Pod-level securityContext ────────────────────────────────────────────
+      # 65532 = uid/gid del usuario "nonroot" de las imágenes distroless.
+      # Aplica a todos los containers e initContainers del pod.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      # ── initContainer: selección de clave P2P ────────────────────────────────
+      # Escribe la clave correcta para este pod (basada en el índice del
+      # StatefulSet) a /keys/p2p_secret_key, en un volumen emptyDir efímero.
+      # El container principal la lee desde ahí — sin eval, sin variables
+      # dinámicas expuestas en el entorno del proceso principal.
+      # La clave real vive en el Secret axiom-bootstrap-keys; esto es solo tránsito.
+      initContainers:
+      - name: select-p2p-key
+        image: busybox:1.36
+        command: ["sh", "-c"]
+        args:
+          - |
+            IDX="${HOSTNAME##*-}"
+            eval "KEY=\$AXIOM_P2P_SECRET_KEY_${IDX}"
+            echo -n "$KEY" > /keys/p2p_secret_key
         env:
-        - name: REDIS_URL
-          value: "redis+sentinel://redis-sentinel:26379/mymaster/0"
-        - name: CLICKHOUSE_URL
-          value: "http://clickhouse:8123/"
-        - name: PORT
-          value: "3000"
-        - name: P2P_LISTEN_ADDR
-          value: "/ip4/0.0.0.0/tcp/4001"
-        # La clave se selecciona por índice de pod (POD_INDEX) en un initContainer.
-        # Para simplificar, usamos una variable única por pod inyectando todas y
-        # eligiendo la correcta via el nombre del pod (HOSTNAME termina en -0, -1, -2).
         - name: AXIOM_P2P_SECRET_KEY_0
           valueFrom:
             secretKeyRef:
@@ -83,13 +85,48 @@ spec:
             secretKeyRef:
               name: axiom-bootstrap-keys
               key: AXIOM_P2P_SECRET_KEY_2
-        # Script que elige la clave correcta según el índice del pod StatefulSet
+        volumeMounts:
+        - name: p2p-key
+          mountPath: /keys
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      containers:
+      - name: axiom-bootstrap
+        # Kustomize reemplaza este tag con sha-XXXXXXXX via `images:` en kustomization.yaml
+        image: axiom-node:latest
+        imagePullPolicy: IfNotPresent
+        # ── Container-level securityContext ─────────────────────────────────────
+        # readOnlyRootFilesystem: PRUEBA EN STAGING PRIMERO.
+        # /data (PVC) y /keys (emptyDir) cubren las escrituras esperadas.
+        # /tmp como emptyDir cubre ficheros temporales de Tokio/libs Rust.
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        # No se usa eval ni variables de entorno dinámicas en el proceso principal.
         command: ["/bin/sh", "-c"]
         args:
           - |
-            IDX="${HOSTNAME##*-}"
-            eval "export AXIOM_P2P_SECRET_KEY=\$AXIOM_P2P_SECRET_KEY_${IDX}"
+            export AXIOM_P2P_SECRET_KEY="$(cat /keys/p2p_secret_key)"
             exec ./axiom-node
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 4001
+          name: p2p
+        env:
+        - name: REDIS_URL
+          value: "redis+sentinel://redis-sentinel:26379/mymaster/0"
+        - name: CLICKHOUSE_URL
+          value: "http://clickhouse:8123/"
+        - name: PORT
+          value: "3000"
+        - name: P2P_LISTEN_ADDR
+          value: "/ip4/0.0.0.0/tcp/4001"
         - name: CRDT_DB_PATH
           value: "/data/crdt_bootstrap.db"
         - name: ADMIN_TOKEN
@@ -131,6 +168,19 @@ spec:
         volumeMounts:
         - name: data-volume
           mountPath: /data
+        - name: p2p-key
+          mountPath: /keys
+        # /tmp como emptyDir: necesario con readOnlyRootFilesystem=true.
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      # emptyDir efímero para el tránsito de la clave P2P seleccionada por
+      # el initContainer. La clave real vive en el Secret axiom-bootstrap-keys.
+      - name: p2p-key
+        emptyDir: {}
+      # emptyDir para /tmp: requerido por readOnlyRootFilesystem=true.
+      - name: tmp
+        emptyDir: {}
   volumeClaimTemplates:
   - metadata:
       name: data-volume

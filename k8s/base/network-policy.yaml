@@ -1,0 +1,67 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# NetworkPolicies — restricción de ingress a datastores
+#
+# REQUISITO: Tu CNI debe soportar NetworkPolicy (Calico, Cilium, etc.).
+# Si usas kubenet básico u otro CNI que la ignora silenciosamente, estas
+# policies NO tienen efecto de seguridad. Verifica con:
+#   kubectl get networkpolicy
+# y prueba un bloqueo real antes de darlo por cerrado.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Redis: solo axiom-node, axiom-bootstrap, redis-sentinel y réplicas Redis ──
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-allow-app-only
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: axiom-node
+        - podSelector:
+            matchLabels:
+              app: axiom-bootstrap
+        - podSelector:
+            matchLabels:
+              app: redis-sentinel
+        - podSelector:
+            matchLabels:
+              app: redis   # replicación entre pods del propio StatefulSet
+      ports:
+        - port: 6379
+---
+# ── ClickHouse: axiom-node, axiom-bootstrap, clickhouse-keeper, réplicas CH y Grafana ──
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: clickhouse-allow-app-only
+spec:
+  podSelector:
+    matchLabels:
+      app: clickhouse
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: axiom-node
+        - podSelector:
+            matchLabels:
+              app: axiom-bootstrap
+        - podSelector:
+            matchLabels:
+              app: clickhouse-keeper
+        - podSelector:
+            matchLabels:
+              app: clickhouse   # replicación entre pods del propio StatefulSet
+        - podSelector:
+            matchLabels:
+              app: grafana
+      ports:
+        - port: 8123   # HTTP interface
+        - port: 9000   # Native TCP interface

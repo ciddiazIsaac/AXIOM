@@ -49,11 +49,31 @@ spec:
       labels:
         app: axiom-node
     spec:
+      # ── Pod-level securityContext ────────────────────────────────────────────
+      # 65532 = uid/gid del usuario "nonroot" de las imágenes distroless.
+      # La variante gcr.io/distroless/cc-debian12 sin sufijo puede correr como
+      # root (uid 0); con -nonroot o verificando el Dockerfile se garantiza 65532.
+      # Aplica a todos los containers e initContainers del pod.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
       containers:
       - name: axiom-node
         # Kustomize reemplaza este tag con sha-XXXXXXXX via `images:` en kustomization.yaml
         image: axiom-node:latest
         imagePullPolicy: IfNotPresent
+        # ── Container-level securityContext ─────────────────────────────────────
+        # readOnlyRootFilesystem: PRUEBA EN STAGING PRIMERO.
+        # Si el binario o alguna librería escribe fuera de /data o /tmp,
+        # el pod crasheará con "Read-only file system". Los emptyDir de /data
+        # y /tmp cubren los casos esperados (CRDT cache y ficheros temporales).
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
         ports:
         - containerPort: 3000
           name: http
@@ -112,7 +132,14 @@ spec:
         volumeMounts:
         - name: data-volume
           mountPath: /data
+        # /tmp como emptyDir: necesario con readOnlyRootFilesystem=true.
+        # Tokio y algunas libs Rust pueden escribir ficheros temporales aquí.
+        - name: tmp
+          mountPath: /tmp
       volumes:
       - name: data-volume
         # emptyDir intencional — ver nota de persistencia del CRDT al inicio del archivo.
+        emptyDir: {}
+      # emptyDir para /tmp: requerido por readOnlyRootFilesystem=true.
+      - name: tmp
         emptyDir: {}

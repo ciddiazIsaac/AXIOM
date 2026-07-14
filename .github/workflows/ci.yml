@@ -35,6 +35,24 @@ jobs:
       - name: Run Tests
         run: cargo test --all
 
+  # ── Auditoría de dependencias ─────────────────────────────────────────────────
+  # Gate de seguridad: falla si cualquier dependencia tiene un advisory en
+  # https://rustsec.org. --deny warnings es intencional: sin eso cargo audit
+  # solo imprime pero no falla el build.
+  #
+  # Si CVEs de deps transitivas bloquean el build sin fix disponible, añade un
+  # audit.toml con excepciones EXPLÍCITAS y documentadas (nunca dejes pasar en
+  # silencio — pon la razón y la fecha de revisión en cada entrada).
+  security_audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    needs: build_and_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit --deny warnings
+
   # ── Publicación de imagen con tag inmutable ──────────────────────────────────
   # Solo corre en push a main (no en PRs) para no publicar imágenes de ramas.
   # Genera el tag sha-XXXXXXXX (primeros 8 chars del SHA de git) y lo inyecta
@@ -43,7 +61,7 @@ jobs:
   publish_and_update_manifests:
     name: Publish Image & Update Manifests
     runs-on: ubuntu-latest
-    needs: build_and_test
+    needs: [build_and_test, security_audit]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write        # Para hacer commit del kustomization.yaml actualizado
