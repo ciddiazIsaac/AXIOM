@@ -9,6 +9,10 @@ ignore = [
     # Revisar en Q4 o cuando libp2p suba a hickory-proto 0.26.
     "RUSTSEC-2026-0119",
 
+    # hickory-proto (NSEC3 loop on cross-zone responses).
+    # Sin fix disponible upstream todavía, pero estamos forzados por dependencias.
+    "RUSTSEC-2026-0118",
+
     # paste: sin mantenedor, pero es solo un macro crate y no tiene CVEs de ejecución.
     # Entra transitivamente por netlink-packet-core en target all.
     # Sin reemplazo directo a nivel de nuestras dependencias.
