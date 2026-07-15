@@ -210,7 +210,7 @@ pub async fn run_server() -> anyhow::Result<()> {
 
                         if let Ok(mut sentinel_client) = redis::sentinel::SentinelClient::build(
                             vec![format!("redis://{sentinel_node}")],
-                            master_name.to_string(),
+                            master_name,
                             None,
                             redis::sentinel::SentinelServerType::Master,
                         ) {
