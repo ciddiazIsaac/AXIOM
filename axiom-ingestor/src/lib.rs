@@ -158,6 +158,48 @@ async fn flush_batch(
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+// ─── Helpers TLS ─────────────────────────────────────────────────────────────
+
+/// Construye un `reqwest::Client` con CA cert custom si CLICKHOUSE_CA_CERT está definido.
+/// En dev (sin la variable), devuelve un cliente normal que verificará CAs del sistema.
+fn build_http_client(timeout: Duration) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder().timeout(timeout);
+
+    if let Ok(ca_path) = std::env::var("CLICKHOUSE_CA_CERT") {
+        match std::fs::read(&ca_path) {
+            Ok(pem) => match reqwest::Certificate::from_pem(&pem) {
+                Ok(cert) => {
+                    builder = builder.add_root_certificate(cert);
+                    info!("Ingestor: CA cert de ClickHouse cargado desde {ca_path}");
+                }
+                Err(e) => warn!("Ingestor: cert PEM inválido en {ca_path}: {e}"),
+            },
+            Err(e) => warn!("Ingestor: no se pudo leer CLICKHOUSE_CA_CERT={ca_path}: {e}"),
+        }
+    }
+
+    builder.build().expect("Error construyendo HTTP client")
+}
+
+/// Extrae el nodo Sentinel (host:port) y el nombre del master de la URL.
+/// Soporta `redis+sentinel://` (plano) y `rediss+sentinel://` (TLS).
+fn parse_sentinel_url(redis_url: &str) -> (String, String, bool) {
+    let use_tls = redis_url.starts_with("rediss+sentinel://");
+    let after_scheme = redis_url
+        .trim_start_matches("rediss+sentinel://")
+        .trim_start_matches("redis+sentinel://");
+    // after_scheme = "host:port/mymaster/0"
+    let parts: Vec<&str> = after_scheme.split('/').collect();
+    let sentinel_node = parts[0].to_string(); // "host:port"
+    let master_name = if parts.len() > 1 && !parts[1].is_empty() {
+        parts[1].to_string()
+    } else {
+        "mymaster".to_string()
+    };
+    let scheme = if use_tls { "rediss" } else { "redis" };
+    (format!("{scheme}://{sentinel_node}"), master_name, use_tls)
+}
+
 pub async fn run_ingestor() -> anyhow::Result<()> {
     // Inicializar logging estructurado
     tracing_subscriber::fmt()
@@ -184,26 +226,33 @@ pub async fn run_ingestor() -> anyhow::Result<()> {
     info!("BATCH_SIZE={batch_size}, FLUSH_INTERVAL_MS={flush_interval_ms}");
 
     // ── Conectar a Redis ──────────────────────────────────────────────────────
-    // Parsear URL de sentinel manualmente o asumir "mymaster"
-    // Ejemplo: redis+sentinel://redis-sentinel:26379/mymaster/0
-    let is_sentinel = redis_url.starts_with("redis+sentinel://");
+    // Soporta:
+    //   redis+sentinel://    — Sentinel sin TLS (dev, docker-compose)
+    //   rediss+sentinel://   — Sentinel con TLS (prod, Kubernetes)
+    //   redis://             — conexión directa sin TLS
+    //   rediss://            — conexión directa con TLS
+    let is_sentinel =
+        redis_url.starts_with("redis+sentinel://") || redis_url.starts_with("rediss+sentinel://");
     let mut sentinel_client_opt = None;
     let mut redis_client_opt = None;
 
     let mut redis_con = if is_sentinel {
-        let sentinel_url = redis_url.replace("redis+sentinel://", "redis://");
-        let parts: Vec<&str> = sentinel_url.split('/').collect();
-        let sentinel_node = parts[0];
-        let master_name = if parts.len() > 1 && !parts[1].is_empty() {
-            parts[1]
+        let (node_url, master_name, use_tls) = parse_sentinel_url(&redis_url);
+
+        // TlsMode::Secure cuando el esquema es rediss+sentinel://
+        let tls_params = if use_tls {
+            Some(redis::sentinel::SentinelNodeConnectionInfo {
+                tls_mode: Some(redis::TlsMode::Secure),
+                redis_connection_info: None,
+            })
         } else {
-            "mymaster"
+            None
         };
 
         let mut sentinel_client = redis::sentinel::SentinelClient::build(
-            vec![format!("redis://{sentinel_node}")],
-            master_name.to_string(),
-            None,
+            vec![node_url],
+            master_name,
+            tls_params,
             redis::sentinel::SentinelServerType::Master,
         )?;
         let con = sentinel_client.get_async_connection().await?;
@@ -234,10 +283,10 @@ pub async fn run_ingestor() -> anyhow::Result<()> {
         Err(e) => return Err(e.into()),
     }
 
-    // ── Cliente HTTP para ClickHouse ──────────────────────────────────────────
-    let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30)) // timeout más amplio para batches grandes
-        .build()?;
+    // ── Cliente HTTP para ClickHouse (con CA cert si CLICKHOUSE_CA_CERT está definido) ─
+    // En prod: CLICKHOUSE_CA_CERT=/tls/clickhouse/ca.crt + CLICKHOUSE_URL=https://...:8443/
+    // En dev: sin la variable, verifica CAs del sistema (compatible con http://)
+    let http_client = build_http_client(Duration::from_secs(30));
 
     info!("Escuchando en '{REDIS_STREAM}' (batch_size={batch_size})...");
 

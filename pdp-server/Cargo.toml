@@ -9,8 +9,11 @@ tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.12", features = ["json"] }
-redis = { version = "0.27", features = ["sentinel", "tokio-comp"] }
+# TLS: rustls-tls para verificar CA cert custom de ClickHouse (prod)
+# En dev (http://), el CA cert no se carga aunque el feature esté compilado
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# tls-rustls: verificación del servidor Redis con CA cert custom (prod)
+redis = { version = "0.27", features = ["sentinel", "tokio-comp", "tokio-rustls-comp"] }
 tracing = "0.1"
 chrono = "0.4"
 notify = "6.1.1"

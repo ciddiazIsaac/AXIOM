@@ -47,8 +47,47 @@ pub struct AuditEvent {
     pub latency_ms: f64,
 }
 
-/// Spooler en segundo plano para persistir eventos de auditoría
-/// Escribe los eventos en un archivo rotativo (NDJSON) sin bloquear el hilo principal.
+/// Construye la URL redis:// interna que el crate usa para el SentinelClient.
+/// Soporta tanto `redis+sentinel://` (plano, dev) como
+/// `rediss+sentinel://` (TLS, prod).
+fn sentinel_node_url(redis_url: &str) -> String {
+    // rediss+sentinel://host:port/master/db → rediss://host:port
+    // redis+sentinel://host:port/master/db  → redis://host:port
+    if redis_url.starts_with("rediss+sentinel://") {
+        let stripped = redis_url.trim_start_matches("rediss+sentinel://");
+        let host_port = stripped.split('/').next().unwrap_or(stripped);
+        format!("rediss://{host_port}")
+    } else {
+        // redis+sentinel:// o redis+sentinel sin esquema
+        let stripped = redis_url
+            .trim_start_matches("redis+sentinel://")
+            .trim_start_matches("redis://");
+        let host_port = stripped.split('/').next().unwrap_or(stripped);
+        format!("redis://{host_port}")
+    }
+}
+
+/// Extrae el nombre del master de la URL Sentinel.
+/// `redis+sentinel://host:port/mymaster/0` → `"mymaster"`
+fn extract_master_name(redis_url: &str) -> &str {
+    // Quitar esquema
+    let after_scheme = redis_url
+        .trim_start_matches("rediss+sentinel://")
+        .trim_start_matches("redis+sentinel://");
+    // after_scheme = "host:port/mymaster/0"
+    let parts: Vec<&str> = after_scheme.split('/').collect();
+    if parts.len() > 1 && !parts[1].is_empty() {
+        parts[1]
+    } else {
+        "mymaster"
+    }
+}
+
+// ─── Spooler ──────────────────────────────────────────────────────────────────
+
+/// Spooler en segundo plano para persistir eventos de auditoría.
+/// Escribe los eventos en Redis Streams (con TLS si REDIS_URL usa rediss://)
+/// y cae en disco (NDJSON) si Redis no está disponible.
 pub struct AuditSpooler;
 
 impl AuditSpooler {
@@ -72,25 +111,33 @@ impl AuditSpooler {
                 .await
                 .ok();
 
-            // 2. Preparar el cliente de Redis
-            let is_sentinel = redis_url.starts_with("redis+sentinel://");
+            // 2. Determinar si la URL es Sentinel y si usa TLS
+            let is_sentinel = redis_url.starts_with("redis+sentinel://")
+                || redis_url.starts_with("rediss+sentinel://");
+            let use_tls =
+                redis_url.starts_with("rediss://") || redis_url.starts_with("rediss+sentinel://");
+
             let mut sentinel_client_opt = None;
             let mut redis_client_opt = None;
 
             let mut redis_con = if is_sentinel {
-                let sentinel_url = redis_url.replace("redis+sentinel://", "redis://");
-                let parts: Vec<&str> = sentinel_url.split('/').collect();
-                let sentinel_node = parts[0];
-                let master_name = if parts.len() > 1 && !parts[1].is_empty() {
-                    parts[1]
+                let node_url = sentinel_node_url(&redis_url);
+                let master_name = extract_master_name(&redis_url).to_string();
+
+                // Configurar TlsMode::Secure si el esquema es TLS
+                let tls_params = if use_tls {
+                    Some(redis::sentinel::SentinelNodeConnectionInfo {
+                        tls_mode: Some(redis::TlsMode::Secure),
+                        redis_connection_info: None,
+                    })
                 } else {
-                    "mymaster"
+                    None
                 };
 
                 if let Ok(mut sentinel_client) = redis::sentinel::SentinelClient::build(
-                    vec![format!("redis://{sentinel_node}")],
-                    master_name.to_string(),
-                    None,
+                    vec![node_url],
+                    master_name,
+                    tls_params,
                     redis::sentinel::SentinelServerType::Master,
                 ) {
                     let con = sentinel_client.get_async_connection().await.ok();
@@ -100,6 +147,7 @@ impl AuditSpooler {
                     None
                 }
             } else {
+                // Conexión directa (dev local sin Sentinel)
                 if let Ok(redis_client) = redis::Client::open(redis_url.as_str()) {
                     let con = redis_client.get_multiplexed_async_connection().await.ok();
                     redis_client_opt = Some(redis_client);

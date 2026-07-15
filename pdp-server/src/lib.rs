@@ -40,19 +40,47 @@ pub async fn build_app_state(ai_metrics: AiMetrics) -> AppState {
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-    // Iniciar el Spooler en segundo plano con Redis como broker
+    // ── URL de Redis (soporta redis://, rediss://, redis+sentinel://, rediss+sentinel://) ──
+    // En prod: rediss+sentinel://redis-sentinel:26380/mymaster/0
+    // En dev:  redis://redis:6379/  (docker-compose, sin TLS)
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
+
+    // Iniciar el Spooler en segundo plano con Redis como broker.
+    // El Spooler detecta rediss:// y carga REDIS_CA_CERT internamente.
     let log_path = std::path::PathBuf::from("./logs/audit.ndjson");
-    let redis_url = "redis://redis:6379/".to_string();
     AuditSpooler::spawn(rx, redis_url, log_path);
 
     let engine = ZeroTrustEngine::new(&policy)
         .expect("Failed to initialize PDP Engine")
         .with_audit(tx);
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(500))
-        .build()
-        .unwrap();
-    let clickhouse_url = "http://clickhouse:8123/".to_string();
+
+    // ── URL de ClickHouse (soporta http:// y https://) ────────────────────────
+    // En prod: https://clickhouse:8443/
+    // En dev:  http://clickhouse:8123/  (docker-compose, sin TLS)
+    let clickhouse_url =
+        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://127.0.0.1:8123/".to_string());
+
+    // ── Cliente HTTP: añade CA cert custom si CLICKHOUSE_CA_CERT está definido ─
+    // Esto permite verificar el certificado del servidor ClickHouse firmado
+    // por la CA interna de cert-manager sin instalar nada en el sistema.
+    let mut http_builder =
+        reqwest::Client::builder().timeout(std::time::Duration::from_millis(500));
+
+    if let Ok(ca_path) = std::env::var("CLICKHOUSE_CA_CERT") {
+        match std::fs::read(&ca_path) {
+            Ok(pem) => match reqwest::Certificate::from_pem(&pem) {
+                Ok(cert) => {
+                    http_builder = http_builder.add_root_certificate(cert);
+                    tracing::info!("PDP: CA cert de ClickHouse cargado desde {ca_path}");
+                }
+                Err(e) => tracing::warn!("PDP: cert PEM inválido en {ca_path}: {e}"),
+            },
+            Err(e) => tracing::warn!("PDP: no se pudo leer CLICKHOUSE_CA_CERT={ca_path}: {e}"),
+        }
+    }
+
+    let http_client = http_builder.build().unwrap();
 
     AppState {
         engine: Arc::new(engine),

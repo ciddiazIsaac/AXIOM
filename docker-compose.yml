@@ -1,3 +1,12 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# docker-compose.yml — Perfil de DESARROLLO LOCAL (sin TLS)
+#
+# TLS (rediss://, https://) solo se activa en Kubernetes mediante el overlay
+# k8s/base/cert-manager.yaml + variables de entorno REDIS_CA_CERT / CLICKHOUSE_CA_CERT.
+#
+# Este archivo mantiene redis:// y http:// intencionalmente para no
+# interrumpir el loop de desarrollo. NO añadir TLS aquí.
+# ──────────────────────────────────────────────────────────────────────────────
 version: '3.8'
 
 services:
