@@ -2,7 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-- cert-manager.yaml      # CA interna + Certificates Redis/ClickHouse (cert-manager CRDs requeridos)
+- cert-manager.yaml
 - bootstrap-secrets.yaml
 - redis.yaml
 - clickhouse.yaml
@@ -20,7 +20,7 @@ resources:
 images:
 - name: axiom-node
   newName: ghcr.io/ciddiazisaac/axiom-node
-  newTag: sha-75f480ab
+  newTag: sha-d01e9059
 
 configMapGenerator:
 - files:
