@@ -241,10 +241,10 @@ pub async fn run_ingestor() -> anyhow::Result<()> {
 
         // TlsMode::Secure cuando el esquema es rediss+sentinel://
         let tls_params = if use_tls {
-            Some(redis::sentinel::SentinelNodeConnectionInfo {
-                tls_mode: Some(redis::TlsMode::Secure),
-                redis_connection_info: None,
-            })
+            Some(
+                redis::sentinel::SentinelNodeConnectionInfo::default()
+                    .set_tls_mode(redis::TlsMode::Secure),
+            )
         } else {
             None
         };

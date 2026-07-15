@@ -126,10 +126,10 @@ impl AuditSpooler {
 
                 // Configurar TlsMode::Secure si el esquema es TLS
                 let tls_params = if use_tls {
-                    Some(redis::sentinel::SentinelNodeConnectionInfo {
-                        tls_mode: Some(redis::TlsMode::Secure),
-                        redis_connection_info: None,
-                    })
+                    Some(
+                        redis::sentinel::SentinelNodeConnectionInfo::default()
+                            .set_tls_mode(redis::TlsMode::Secure),
+                    )
                 } else {
                     None
                 };
