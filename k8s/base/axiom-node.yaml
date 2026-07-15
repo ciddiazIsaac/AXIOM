@@ -35,8 +35,24 @@
 #   El campo `image: axiom-node` es el selector que kustomization.yaml intercepta.
 #   Nunca se despliega :latest en producción.
 # ──────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: axiom-node-headless
+  labels:
+    app: axiom-node
+spec:
+  clusterIP: None
+  ports:
+    - port: 3000
+      name: http
+    - port: 4001
+      name: p2p
+  selector:
+    app: axiom-node
+---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: axiom-node
   labels:
@@ -45,6 +61,7 @@ metadata:
     # ── Reloader: Auto-reinicio de los pods si la CA o los certs de hoja cambian ──
     secret.reloader.stakater.com/reload: "redis-tls-secret,clickhouse-tls-secret"
 spec:
+  serviceName: "axiom-node-headless"
   replicas: 3
   selector:
     matchLabels:
@@ -174,6 +191,8 @@ spec:
             cpu: "500m"
             memory: "256Mi"
         volumeMounts:
+        - name: audit-volume
+          mountPath: /audit
         - name: data-volume
           mountPath: /data
         # /tmp como emptyDir: necesario con readOnlyRootFilesystem=true.
@@ -212,3 +231,15 @@ spec:
         secret:
           secretName: clickhouse-tls-secret
           defaultMode: 0444
+  volumeClaimTemplates:
+  - metadata:
+      name: audit-volume
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          # Cálculo (ADR-005): Tamaño promedio de AuditEvent (~500 bytes) 
+          # × 10,000 eventos = ~5MB. 
+          # Con factor de seguridad (fluctuaciones y logs Deny) y límite de K8s,
+          # 1Gi es más que suficiente para garantizar persistencia local.
+          storage: 1Gi
