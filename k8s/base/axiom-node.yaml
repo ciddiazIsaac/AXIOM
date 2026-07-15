@@ -39,6 +39,11 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: axiom-node
+  labels:
+    app: axiom-node
+  annotations:
+    # ── Reloader: Auto-reinicio de los pods si la CA o los certs de hoja cambian ──
+    secret.reloader.stakater.com/reload: "redis-tls-secret,clickhouse-tls-secret"
 spec:
   replicas: 3
   selector:
@@ -59,6 +64,33 @@ spec:
         runAsUser: 65532
         runAsGroup: 65532
         fsGroup: 65532
+      initContainers:
+      # ── Construir Bundle CA (System + Interno) ──────────────────────────
+      # Combina el store nativo (Alpine/Debian) con la CA de cert-manager
+      # en un archivo único para no perder la conectividad saliente.
+      - name: ca-bundle-builder
+        image: alpine:3.19
+        command:
+        - sh
+        - -c
+        - |
+          apk add --no-cache ca-certificates && \
+          if [ ! -f /etc/ssl/certs/ca-certificates.crt ]; then
+            echo "Error: /etc/ssl/certs/ca-certificates.crt not found in base image!"
+            exit 1
+          fi && \
+          cat /etc/ssl/certs/ca-certificates.crt /tls/redis/ca.crt > /custom-ssl/ca-bundle.crt
+        volumeMounts:
+        - name: redis-tls
+          mountPath: /tls/redis
+          readOnly: true
+        - name: custom-ssl
+          mountPath: /custom-ssl
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop: ["ALL"]
       containers:
       - name: axiom-node
         # Kustomize reemplaza este tag con sha-XXXXXXXX via `images:` en kustomization.yaml
@@ -81,9 +113,21 @@ spec:
           name: p2p
         env:
         - name: REDIS_URL
-          value: "redis+sentinel://redis-sentinel:26379/mymaster/0"
+          # TLS: rediss+sentinel:// — Sentinel escucha en 26380 (TLS)
+          value: "rediss+sentinel://redis-sentinel:26380/mymaster/0"
+        - name: REDIS_CA_CERT
+          # Ruta al CA cert para verificar el servidor Redis
+          value: "/tls/redis/ca.crt"
         - name: CLICKHOUSE_URL
-          value: "http://clickhouse:8123/"
+          # TLS: https:// — ClickHouse escucha en 8443 (HTTPS)
+          value: "https://clickhouse:8443/"
+        - name: CLICKHOUSE_CA_CERT
+          # Ruta al CA cert para verificar el servidor ClickHouse (usado por reqwest)
+          value: "/tls/clickhouse/ca.crt"
+        - name: SSL_CERT_FILE
+          # rustls usa esta variable para confiar en la CA automáticamente.
+          # Apunta al bundle fusionado por el initContainer.
+          value: "/custom-ssl/ca-bundle.crt"
         - name: PORT
           value: "3000"
         - name: P2P_LISTEN_ADDR
@@ -136,6 +180,19 @@ spec:
         # Tokio y algunas libs Rust pueden escribir ficheros temporales aquí.
         - name: tmp
           mountPath: /tmp
+        # ── Custom SSL CA Bundle ──────────────────────────────────────────────
+        - name: custom-ssl
+          mountPath: /custom-ssl
+          readOnly: true
+        # ── TLS certs (read-only) ─────────────────────────────────────────────
+        # Montados desde los Secrets emitidos por cert-manager.
+        # La ruta coincide con las env vars REDIS_CA_CERT y CLICKHOUSE_CA_CERT.
+        - name: redis-tls
+          mountPath: /tls/redis
+          readOnly: true
+        - name: clickhouse-tls
+          mountPath: /tls/clickhouse
+          readOnly: true
       volumes:
       - name: data-volume
         # emptyDir intencional — ver nota de persistencia del CRDT al inicio del archivo.
@@ -143,3 +200,15 @@ spec:
       # emptyDir para /tmp: requerido por readOnlyRootFilesystem=true.
       - name: tmp
         emptyDir: {}
+      # emptyDir para el bundle CA combinado generado por el initContainer.
+      - name: custom-ssl
+        emptyDir: {}
+      # ── TLS Secrets (emitidos por cert-manager, rotación automática) ─────────
+      - name: redis-tls
+        secret:
+          secretName: redis-tls-secret
+          defaultMode: 0444
+      - name: clickhouse-tls
+        secret:
+          secretName: clickhouse-tls-secret
+          defaultMode: 0444

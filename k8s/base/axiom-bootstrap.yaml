@@ -35,6 +35,9 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: axiom-bootstrap
+  annotations:
+    # ── Reloader: Auto-reinicio de los pods si la CA o los certs de hoja cambian ──
+    secret.reloader.stakater.com/reload: "redis-tls-secret,clickhouse-tls-secret"
 spec:
   serviceName: "axiom-bootstrap"   # Vincula con el headless Service de arriba
   replicas: 3
@@ -46,20 +49,15 @@ spec:
       labels:
         app: axiom-bootstrap
     spec:
+      serviceAccountName: axiom-bootstrap-sa
       # ── Pod-level securityContext ────────────────────────────────────────────
-      # 65532 = uid/gid del usuario "nonroot" de las imágenes distroless.
-      # Aplica a todos los containers e initContainers del pod.
+      # 1000 = uid/gid sugerido para despliegues modernos.
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
-      # ── initContainer: selección de clave P2P ────────────────────────────────
-      # Escribe la clave correcta para este pod (basada en el índice del
-      # StatefulSet) a /keys/p2p_secret_key, en un volumen emptyDir efímero.
-      # El container principal la lee desde ahí — sin eval, sin variables
-      # dinámicas expuestas en el entorno del proceso principal.
-      # La clave real vive en el Secret axiom-bootstrap-keys; esto es solo tránsito.
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      # ── initContainers ──────────────────────────────────────────────────────
       initContainers:
       - name: select-p2p-key
         image: busybox:1.36
@@ -90,7 +88,31 @@ spec:
           mountPath: /keys
         securityContext:
           allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop: ["ALL"]
+      # ── 2. Construir Bundle CA (System + Interno) ────────────────────────
+      - name: ca-bundle-builder
+        image: alpine:3.19
+        command:
+        - sh
+        - -c
+        - |
+          apk add --no-cache ca-certificates && \
+          if [ ! -f /etc/ssl/certs/ca-certificates.crt ]; then
+            echo "Error: /etc/ssl/certs/ca-certificates.crt not found in base image!"
+            exit 1
+          fi && \
+          cat /etc/ssl/certs/ca-certificates.crt /tls/redis/ca.crt > /custom-ssl/ca-bundle.crt
+        volumeMounts:
+        - name: redis-tls
+          mountPath: /tls/redis
+          readOnly: true
+        - name: custom-ssl
+          mountPath: /custom-ssl
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
           capabilities:
             drop: ["ALL"]
       containers:
@@ -120,9 +142,19 @@ spec:
           name: p2p
         env:
         - name: REDIS_URL
-          value: "redis+sentinel://redis-sentinel:26379/mymaster/0"
+          # TLS: rediss+sentinel:// — Sentinel escucha en 26380 (TLS)
+          value: "rediss+sentinel://redis-sentinel:26380/mymaster/0"
+        - name: REDIS_CA_CERT
+          value: "/tls/redis/ca.crt"
         - name: CLICKHOUSE_URL
-          value: "http://clickhouse:8123/"
+          # TLS: https:// — ClickHouse escucha en 8443 (HTTPS)
+          value: "https://clickhouse:8443/"
+        - name: CLICKHOUSE_CA_CERT
+          value: "/tls/clickhouse/ca.crt"
+        - name: SSL_CERT_FILE
+          # rustls usa esta variable para confiar en la CA automáticamente.
+          # Apunta al bundle fusionado por el initContainer.
+          value: "/custom-ssl/ca-bundle.crt"
         - name: PORT
           value: "3000"
         - name: P2P_LISTEN_ADDR
@@ -173,6 +205,17 @@ spec:
         # /tmp como emptyDir: necesario con readOnlyRootFilesystem=true.
         - name: tmp
           mountPath: /tmp
+        # ── Custom SSL CA Bundle ──────────────────────────────────────────────
+        - name: custom-ssl
+          mountPath: /custom-ssl
+          readOnly: true
+        # ── TLS certs (read-only) ───────────────────────────────────────────
+        - name: redis-tls
+          mountPath: /tls/redis
+          readOnly: true
+        - name: clickhouse-tls
+          mountPath: /tls/clickhouse
+          readOnly: true
       volumes:
       # emptyDir efímero para el tránsito de la clave P2P seleccionada por
       # el initContainer. La clave real vive en el Secret axiom-bootstrap-keys.
@@ -181,6 +224,18 @@ spec:
       # emptyDir para /tmp: requerido por readOnlyRootFilesystem=true.
       - name: tmp
         emptyDir: {}
+      # emptyDir para el bundle CA combinado generado por el initContainer.
+      - name: custom-ssl
+        emptyDir: {}
+      # ── TLS Secrets (emitidos por cert-manager, rotación automática) ─────────
+      - name: redis-tls
+        secret:
+          secretName: redis-tls-secret
+          defaultMode: 0444
+      - name: clickhouse-tls
+        secret:
+          secretName: clickhouse-tls-secret
+          defaultMode: 0444
   volumeClaimTemplates:
   - metadata:
       name: data-volume

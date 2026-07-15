@@ -1,0 +1,126 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# cert-manager TLS — CA interna + Certificates para Redis y ClickHouse
+#
+# PRERREQUISITO:
+#   cert-manager instalado en el cluster:
+#     kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+#     kubectl wait --for=condition=Available deployment/cert-manager -n cert-manager --timeout=120s
+#
+# ESTRATEGIA:
+#   1. Issuer "selfsigned-issuer"   → emite el Certificate del CA raíz
+#   2. Certificate "axiom-ca"       → CA interna (isCA: true), Secret: axiom-ca-secret
+#   3. Issuer "axiom-ca-issuer"     → firma hojas usando axiom-ca-secret
+#   4. Certificate "redis-tls"      → cert de hoja para Redis + Sentinel
+#   5. Certificate "clickhouse-tls" → cert de hoja para ClickHouse
+#
+# ROTACIÓN AUTOMÁTICA:
+#   - Hojas (redis, clickhouse): duration=2160h (90d), renewBefore=720h (30d)
+#   - CA: duration=43800h (~5 años), renovar manualmente según runbook
+#   - Ver: docs/runbook-tls-rotation.md
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ─── 1. Issuer Bootstrap (self-signed) — solo para crear el CA ───────────────
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned-issuer
+  # namespace: default  ← ajusta si el namespace del cluster no es "default"
+spec:
+  selfSigned: {}
+
+---
+# ─── 2. CA raíz interna ──────────────────────────────────────────────────────
+# isCA: true → cert-manager lo trata como autoridad; el Secret resultante
+# tendrá tls.crt (CA cert) y tls.key (CA key) además de ca.crt.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: axiom-ca
+spec:
+  isCA: true
+  commonName: axiom-internal-ca
+  secretName: axiom-ca-secret
+  duration: 43800h        # ~5 años
+  renewBefore: 8760h      # alerta 1 año antes (para rotación manual planificada)
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned-issuer
+    kind: Issuer
+    group: cert-manager.io
+
+---
+# ─── 3. Issuer CA — firma los certs de hoja ──────────────────────────────────
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: axiom-ca-issuer
+spec:
+  ca:
+    secretName: axiom-ca-secret
+
+---
+# ─── 4. Certificate Redis ────────────────────────────────────────────────────
+# SANs cubren todos los nombres DNS por los que los clientes se conectan:
+#   - redis-headless       → StatefulSet headless (replicación entre pods)
+#   - redis-master         → Service de escritura (clientes master)
+#   - redis-replica        → Service de lectura
+#   - redis-0/1/2.redis-headless → pods individuales por nombre
+#   - redis-sentinel       → Service del Sentinel
+#   - redis-sentinel pods  → no estrictamente necesario si el Sentinel
+#                            usa el Service, pero añadido por completitud
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: redis-tls
+spec:
+  secretName: redis-tls-secret
+  duration: 2160h      # 90 días
+  renewBefore: 720h    # 30 días antes — cert-manager renueva automáticamente
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - redis-headless
+    - redis-master
+    - redis-replica
+    - redis-sentinel
+    - redis-0.redis-headless
+    - redis-1.redis-headless
+    - redis-2.redis-headless
+    # FQDN completo por si acaso hay cross-namespace (no debería, pero por robustez)
+    - redis-headless.default.svc.cluster.local
+    - redis-master.default.svc.cluster.local
+    - redis-sentinel.default.svc.cluster.local
+  issuerRef:
+    name: axiom-ca-issuer
+    kind: Issuer
+    group: cert-manager.io
+
+---
+# ─── 5. Certificate ClickHouse ───────────────────────────────────────────────
+# SANs cubren el headless Service y los pods individuales del StatefulSet.
+# El puerto HTTPS 8443 es el punto de entrada para clientes (ingestor, PDP).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: clickhouse-tls
+spec:
+  secretName: clickhouse-tls-secret
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - clickhouse
+    - clickhouse-0.clickhouse
+    - clickhouse-1.clickhouse
+    - clickhouse.default.svc.cluster.local
+    - clickhouse-0.clickhouse.default.svc.cluster.local
+    - clickhouse-1.clickhouse.default.svc.cluster.local
+  issuerRef:
+    name: axiom-ca-issuer
+    kind: Issuer
+    group: cert-manager.io

@@ -1,9 +1,16 @@
-# ClickHouse HA con ClickHouse Keeper (replicación 2 shards)
+# ClickHouse HA con ClickHouse Keeper (replicación 2 shards) — HTTPS habilitado
 #
 # Arquitectura:
 #   - 3 pods ClickHouse Keeper (quorum distribuido, reemplaza ZooKeeper)
 #   - 2 pods ClickHouse Server con replicación entre ellos
-#   - Un ConfigMap con la configuración de cluster y macros por pod
+#   - Un ConfigMap con la configuración de cluster, macros y TLS por pod
+#
+# TLS:
+#   - Puerto HTTP plano 8123 → deshabilitado (<http_port>-1</http_port>)
+#   - Puerto HTTPS 8443 → único punto de entrada para clientes
+#   - Puerto TCP nativo TLS 9440 (para replicación inter-shard si se necesita)
+#   - Certificados gestionados por cert-manager → Secret: clickhouse-tls-secret
+#   - CA cert en: /tls/ca.crt | Cert: /tls/tls.crt | Key: /tls/tls.key
 #
 # Los datos escritos en el shard-1 se replican automáticamente al shard-2
 # usando las tablas ReplicatedMergeTree de ClickHouse.
@@ -27,6 +34,9 @@ spec:
 
 ---
 # ─── 2. ConfigMap: configuración de Keeper ───────────────────────────────────
+# Keeper (Raft internal) queda en plano — fuera del scope de este ticket.
+# El tráfico Keeper–Keeper y Server–Keeper permanece dentro del namespace
+# protegido por NetworkPolicy. Upgrade a TLS Keeper es un ticket aparte.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -97,9 +107,6 @@ spec:
           name: client
         - containerPort: 9234
           name: raft
-        # readiness: el Keeper está listo cuando acepta conexiones TCP en el
-        # puerto de client Raft. El cluster no debe recibir escrituras hasta
-        # que los 3 Keepers formen quorum.
         readinessProbe:
           tcpSocket:
             port: 9181
@@ -112,7 +119,6 @@ spec:
           initialDelaySeconds: 20
           periodSeconds: 20
           failureThreshold: 3
-        # Keeper gestiona solo metadatos Raft, no datos de usuario.
         resources:
           requests:
             cpu: "100m"
@@ -153,15 +159,15 @@ metadata:
 spec:
   clusterIP: None
   ports:
-    - port: 8123
-      name: http
-    - port: 9000
-      name: tcp
+    - port: 8443
+      name: https
+    - port: 9440
+      name: tcp-tls
   selector:
     app: clickhouse
 
 ---
-# ─── 5. ConfigMap: config de cluster para ClickHouse Server ──────────────────
+# ─── 5. ConfigMap: config de cluster + TLS para ClickHouse Server ─────────────
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -169,20 +175,54 @@ metadata:
 data:
   cluster.xml: |
     <clickhouse>
+      <!-- ── TLS: deshabilitar HTTP plano, habilitar HTTPS ─────────────────── -->
+      <http_port>-1</http_port>          <!-- HTTP plano deshabilitado -->
+      <https_port>8443</https_port>      <!-- HTTPS habilitado -->
+      <tcp_port>-1</tcp_port>            <!-- TCP nativo plano deshabilitado -->
+      <tcp_port_secure>9440</tcp_port_secure>  <!-- TCP nativo TLS habilitado -->
+
+      <!-- ── Certificados TLS (montados desde clickhouse-tls-secret) ────────── -->
+      <openSSL>
+        <server>
+          <certificateFile>/tls/tls.crt</certificateFile>
+          <privateKeyFile>/tls/tls.key</privateKeyFile>
+          <caConfig>/tls/ca.crt</caConfig>
+          <!-- verifyMode none = TLS servidor; clientes no necesitan cert propio -->
+          <verifyMode>none</verifyMode>
+          <invalidCertificateHandler>
+            <name>RejectCertificateHandler</name>
+          </invalidCertificateHandler>
+        </server>
+        <client>
+          <!-- Para conexiones salientes entre réplicas (replicación inter-shard) -->
+          <loadDefaultCAFile>false</loadDefaultCAFile>
+          <caConfig>/tls/ca.crt</caConfig>
+          <verifyMode>strict</verifyMode>
+          <invalidCertificateHandler>
+            <name>RejectCertificateHandler</name>
+          </invalidCertificateHandler>
+        </client>
+      </openSSL>
+
+      <!-- ── Cluster config ─────────────────────────────────────────────────── -->
       <remote_servers>
         <axiom_cluster>
           <shard>
             <replica>
               <host>clickhouse-0.clickhouse</host>
-              <port>9000</port>
+              <port>9440</port>
+              <secure>1</secure>
             </replica>
             <replica>
               <host>clickhouse-1.clickhouse</host>
-              <port>9000</port>
+              <port>9440</port>
+              <secure>1</secure>
             </replica>
           </shard>
         </axiom_cluster>
       </remote_servers>
+
+      <!-- ── ZooKeeper / Keeper ─────────────────────────────────────────────── -->
       <zookeeper>
         <node>
           <host>clickhouse-keeper-0.clickhouse-keeper</host>
@@ -197,6 +237,8 @@ data:
           <port>9181</port>
         </node>
       </zookeeper>
+
+      <!-- ── Macros por pod ─────────────────────────────────────────────────── -->
       <macros>
         <shard from_env="CH_SHARD"/>
         <replica from_env="CH_REPLICA"/>
@@ -222,15 +264,30 @@ spec:
     spec:
       initContainers:
       # Carga el init.sql una sola vez si la DB aún no existe
+      # Ahora usa HTTPS (puerto 8443) con el CA cert para verificar el servidor
       - name: init-db
         image: clickhouse/clickhouse-server:23.8-alpine
         command: ["sh", "-c"]
         args:
           - |
-            until clickhouse-client --host 127.0.0.1 --query "SELECT 1" 2>/dev/null; do
-              echo "Esperando a que ClickHouse arranque..."; sleep 2;
+            until clickhouse-client \
+              --host 127.0.0.1 \
+              --port 9440 \
+              --secure \
+              --query "SELECT 1" 2>/dev/null; do
+              echo "Esperando a que ClickHouse arranque (TLS)..."; sleep 2;
             done
-            clickhouse-client --host 127.0.0.1 --multiquery < /docker-entrypoint-initdb.d/init.sql || true
+            clickhouse-client \
+              --host 127.0.0.1 \
+              --port 9440 \
+              --secure \
+              --multiquery < /docker-entrypoint-initdb.d/init.sql || true
+        volumeMounts:
+        - name: clickhouse-init
+          mountPath: /docker-entrypoint-initdb.d
+        - name: clickhouse-tls
+          mountPath: /tls
+          readOnly: true
       containers:
       - name: clickhouse
         image: clickhouse/clickhouse-server:23.8-alpine
@@ -242,29 +299,34 @@ spec:
             fieldRef:
               fieldPath: metadata.name   # clickhouse-0 o clickhouse-1
         ports:
-        - containerPort: 8123
-          name: http
-        - containerPort: 9000
-          name: tcp
+        - containerPort: 8443
+          name: https
+        - containerPort: 9440
+          name: tcp-tls
+        # readiness: httpGet no soporta HTTPS con CA custom → exec con curl
+        # curl lee el CA cert desde /tls/ca.crt para verificar el servidor.
         readinessProbe:
-          httpGet:
-            path: /ping
-            port: 8123
+          exec:
+            command:
+              - curl
+              - -sf
+              - --cacert
+              - /tls/ca.crt
+              - https://localhost:8443/ping
           initialDelaySeconds: 10
           periodSeconds: 5
           failureThreshold: 3
-        # liveness igual al readiness: si /ping falla, el pod está bloqueado.
         livenessProbe:
-          httpGet:
-            path: /ping
-            port: 8123
+          exec:
+            command:
+              - curl
+              - -sf
+              - --cacert
+              - /tls/ca.crt
+              - https://localhost:8443/ping
           initialDelaySeconds: 30
           periodSeconds: 20
           failureThreshold: 3
-        # ClickHouse es el componente más hambriento de recursos:
-        # columnar merges, compresiones LZ4/ZSTD, queries analíticas.
-        # 1Gi request permite que el scheduler lo coloque en nodos adecuados;
-        # 4Gi limit da margen para merges grandes sin OOM.
         resources:
           requests:
             cpu: "500m"
@@ -279,6 +341,9 @@ spec:
           mountPath: /docker-entrypoint-initdb.d
         - name: clickhouse-cluster-config
           mountPath: /etc/clickhouse-server/config.d
+        - name: clickhouse-tls
+          mountPath: /tls
+          readOnly: true
       volumes:
       - name: clickhouse-init
         configMap:
@@ -286,6 +351,9 @@ spec:
       - name: clickhouse-cluster-config
         configMap:
           name: clickhouse-cluster-config
+      - name: clickhouse-tls
+        secret:
+          secretName: clickhouse-tls-secret   # emitido por cert-manager
   volumeClaimTemplates:
   - metadata:
       name: clickhouse-data

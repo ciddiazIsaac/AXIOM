@@ -1,13 +1,18 @@
-# Redis HA con Sentinel
+# Redis HA con Sentinel — TLS habilitado
 #
 # Arquitectura:
-#   - 1 Master (redis-master-0): acepta escrituras
-#   - 2 Replicas (redis-replica-0, redis-replica-1): solo lecturas, sincronizan del master
+#   - 1 Master (redis-0): acepta escrituras en puerto TLS 6380
+#   - 2 Replicas (redis-1, redis-2): solo lecturas, sincronizan del master vía TLS
 #   - 3 Sentinels: monitorean el master y promueven una réplica si el master cae (quorum=2)
 #
-# Los clientes se conectan al Sentinel para resolver quién es el master actual.
-# En Kubernetes, el ingestor debe usar un cliente Redis con soporte Sentinel.
-# URL del Sentinel: redis+sentinel://redis-sentinel:26379/mymaster/0
+# TLS:
+#   - Todos los puertos escuchan SOLO en TLS (--port 0 deshabilita el puerto plano)
+#   - Certificados gestionados por cert-manager → Secret: redis-tls-secret
+#   - Replicación entre pods también cifrada (--tls-replication yes)
+#   - Clientes se conectan con rediss:// (o rediss+sentinel://)
+#   - CA cert en: /tls/ca.crt | Server cert: /tls/tls.crt | Key: /tls/tls.key
+#
+# URL del Sentinel TLS: rediss+sentinel://redis-sentinel:26380/mymaster/0
 
 # ─── 1. Headless Service para el StatefulSet de réplicas ─────────────────────
 apiVersion: v1
@@ -19,8 +24,8 @@ metadata:
 spec:
   clusterIP: None
   ports:
-    - port: 6379
-      name: redis
+    - port: 6380
+      name: redis-tls
   selector:
     app: redis
 
@@ -34,7 +39,8 @@ metadata:
     app: redis
 spec:
   ports:
-    - port: 6379
+    - port: 6380
+      name: redis-tls
   selector:
     app: redis
     role: master
@@ -49,7 +55,8 @@ metadata:
     app: redis
 spec:
   ports:
-    - port: 6379
+    - port: 6380
+      name: redis-tls
   selector:
     app: redis
     role: replica
@@ -57,6 +64,7 @@ spec:
 ---
 # ─── 4. StatefulSet: Master + 2 Replicas ─────────────────────────────────────
 # redis-0 arranca como master; redis-1 y redis-2 como replicas del master.
+# Todo el tráfico (cliente y replicación) va cifrado en TLS.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -81,11 +89,14 @@ spec:
           - |
             IDX="${HOSTNAME##*-}"
             if [ "$IDX" = "0" ]; then
-              echo "Arrancando como MASTER"
+              echo "Arrancando como MASTER (TLS)"
               echo "" > /etc/redis/redis.conf
             else
-              echo "Arrancando como REPLICA del master redis-0.redis-headless"
-              echo "replicaof redis-0.redis-headless 6379" > /etc/redis/redis.conf
+              echo "Arrancando como REPLICA TLS del master redis-0.redis-headless"
+              # replicaof apunta al master en el puerto TLS 6380
+              echo "replicaof redis-0.redis-headless 6380" > /etc/redis/redis.conf
+              # La replicación también va cifrada
+              echo "tls-replication yes" >> /etc/redis/redis.conf
             fi
         volumeMounts:
         - name: redis-config
@@ -93,33 +104,69 @@ spec:
       containers:
       - name: redis
         image: redis:7.2-alpine
-        command: ["redis-server", "/etc/redis/redis.conf",
-                  "--save", "60", "1",          # Snapshot cada 60s si hay ≥1 cambio
-                  "--appendonly", "yes",         # AOF habilitado para durabilidad máxima
-                  "--appendfsync", "everysec"]   # Sync AOF cada segundo
+        command:
+          - redis-server
+          - /etc/redis/redis.conf
+          # ── TLS ──────────────────────────────────────────────────────────
+          - --tls-port
+          - "6380"
+          - --port
+          - "0"                        # deshabilita el puerto plano (sin TLS)
+          - --tls-cert-file
+          - /tls/tls.crt
+          - --tls-key-file
+          - /tls/tls.key
+          - --tls-ca-cert-file
+          - /tls/ca.crt
+          - --tls-auth-clients
+          - "no"                       # TLS servidor; no mTLS (clientes no necesitan cert)
+          - --tls-replication
+          - "yes"                      # replicación también cifrada
+          # ── Persistencia ─────────────────────────────────────────────────
+          - --save
+          - "60"
+          - "1"
+          - --appendonly
+          - "yes"
+          - --appendfsync
+          - "everysec"
         ports:
-        - containerPort: 6379
-          name: redis
+        - containerPort: 6380
+          name: redis-tls
         volumeMounts:
         - name: redis-data
           mountPath: /data
         - name: redis-config
           mountPath: /etc/redis
+        - name: redis-tls
+          mountPath: /tls
+          readOnly: true
         readinessProbe:
           exec:
-            command: ["redis-cli", "ping"]
+            command:
+              - redis-cli
+              - --tls
+              - --cacert
+              - /tls/ca.crt
+              - -p
+              - "6380"
+              - ping
           initialDelaySeconds: 5
           periodSeconds: 5
           failureThreshold: 3
         livenessProbe:
           exec:
-            command: ["redis-cli", "ping"]
+            command:
+              - redis-cli
+              - --tls
+              - --cacert
+              - /tls/ca.crt
+              - -p
+              - "6380"
+              - ping
           initialDelaySeconds: 15
           periodSeconds: 20
           failureThreshold: 3
-        # Resources ajustados para Redis 7 con AOF habilitado.
-        # redis-0 (master) tiene más escrituras; redis-1/2 (replicas) menos.
-        # Un solo limit sirve los 3 pods — ajustar con VPA si el master satura.
         resources:
           requests:
             cpu: "100m"
@@ -130,6 +177,9 @@ spec:
       volumes:
       - name: redis-config
         emptyDir: {}
+      - name: redis-tls
+        secret:
+          secretName: redis-tls-secret   # emitido por cert-manager (cert-manager.yaml)
   volumeClaimTemplates:
   - metadata:
       name: redis-data
@@ -140,20 +190,32 @@ spec:
           storage: 5Gi
 
 ---
-# ─── 5. ConfigMap del Sentinel ────────────────────────────────────────────────
+# ─── 5. ConfigMap del Sentinel (TLS) ─────────────────────────────────────────
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: redis-sentinel-config
 data:
   sentinel.conf: |
-    sentinel monitor mymaster redis-0.redis-headless 6379 2
+    # Monitorear el master en el puerto TLS 6380
+    sentinel monitor mymaster redis-0.redis-headless 6380 2
     sentinel down-after-milliseconds mymaster 5000
     sentinel failover-timeout mymaster 10000
     sentinel parallel-syncs mymaster 1
 
+    # TLS en el Sentinel: escucha solo en puerto TLS
+    tls-port 26380
+    port 0
+
+    # Certificados del Sentinel (mismo Secret que Redis)
+    tls-cert-file /tls/tls.crt
+    tls-key-file /tls/tls.key
+    tls-ca-cert-file /tls/ca.crt
+    tls-auth-clients no
+    tls-replication yes
+
 ---
-# ─── 6. Service para que los clientes conecten al Sentinel ───────────────────
+# ─── 6. Service para que los clientes conecten al Sentinel (TLS) ─────────────
 apiVersion: v1
 kind: Service
 metadata:
@@ -162,8 +224,8 @@ metadata:
     app: redis-sentinel
 spec:
   ports:
-    - port: 26379
-      name: sentinel
+    - port: 26380
+      name: sentinel-tls
   selector:
     app: redis-sentinel
 
@@ -188,19 +250,39 @@ spec:
         image: redis:7.2-alpine
         command: ["redis-sentinel", "/etc/redis/sentinel.conf"]
         ports:
-        - containerPort: 26379
-          name: sentinel
+        - containerPort: 26380
+          name: sentinel-tls
+        volumeMounts:
+        - name: sentinel-config
+          mountPath: /etc/redis
+        - name: redis-tls
+          mountPath: /tls
+          readOnly: true
         # readiness: el pod entra en rotación solo cuando el Sentinel acepta
-        # conexiones TCP (puede tardar mientras detecta al master inicial).
+        # conexiones TLS (puede tardar mientras detecta al master inicial).
         readinessProbe:
-          tcpSocket:
-            port: 26379
+          exec:
+            command:
+              - redis-cli
+              - --tls
+              - --cacert
+              - /tls/ca.crt
+              - -p
+              - "26380"
+              - ping
           initialDelaySeconds: 10
           periodSeconds: 10
           failureThreshold: 3
         livenessProbe:
-          tcpSocket:
-            port: 26379
+          exec:
+            command:
+              - redis-cli
+              - --tls
+              - --cacert
+              - /tls/ca.crt
+              - -p
+              - "26380"
+              - ping
           initialDelaySeconds: 20
           periodSeconds: 20
           failureThreshold: 3
@@ -212,10 +294,10 @@ spec:
           limits:
             cpu: "100m"
             memory: "64Mi"
-        volumeMounts:
-        - name: sentinel-config
-          mountPath: /etc/redis
       volumes:
       - name: sentinel-config
         configMap:
           name: redis-sentinel-config
+      - name: redis-tls
+        secret:
+          secretName: redis-tls-secret   # mismo Secret que los pods Redis

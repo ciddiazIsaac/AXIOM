@@ -6,6 +6,10 @@
 # policies NO tienen efecto de seguridad. Verifica con:
 #   kubectl get networkpolicy
 # y prueba un bloqueo real antes de darlo por cerrado.
+#
+# TLS: Los puertos planos (6379, 26379, 8123) han sido eliminados.
+#   - Redis escucha solo en 6380 (TLS) y Sentinel en 26380 (TLS)
+#   - ClickHouse escucha solo en 8443 (HTTPS) y 9440 (TCP TLS)
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ── Redis: solo axiom-node, axiom-bootstrap, redis-sentinel y réplicas Redis ──
@@ -33,7 +37,34 @@ spec:
             matchLabels:
               app: redis   # replicación entre pods del propio StatefulSet
       ports:
-        - port: 6379
+        - port: 6380       # Redis TLS (puerto plano 6379 eliminado)
+---
+# ── Redis Sentinel: solo axiom-node y axiom-bootstrap pueden consultarlo ─────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-sentinel-allow-app-only
+spec:
+  podSelector:
+    matchLabels:
+      app: redis-sentinel
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: axiom-node
+        - podSelector:
+            matchLabels:
+              app: axiom-bootstrap
+        - podSelector:
+            matchLabels:
+              app: redis-sentinel  # sentinels se hablan entre sí
+        - podSelector:
+            matchLabels:
+              app: redis           # redis pods consultan al sentinel en failover
+      ports:
+        - port: 26380      # Sentinel TLS (puerto plano 26379 eliminado)
 ---
 # ── ClickHouse: axiom-node, axiom-bootstrap, clickhouse-keeper, réplicas CH y Grafana ──
 apiVersion: networking.k8s.io/v1
@@ -63,5 +94,5 @@ spec:
             matchLabels:
               app: grafana
       ports:
-        - port: 8123   # HTTP interface
-        - port: 9000   # Native TCP interface
+        - port: 8443   # HTTPS interface (puerto HTTP plano 8123 eliminado)
+        - port: 9440   # TCP nativo TLS (replicación inter-shard)

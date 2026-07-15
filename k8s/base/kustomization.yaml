@@ -2,6 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
+- cert-manager.yaml      # CA interna + Certificates Redis/ClickHouse (cert-manager CRDs requeridos)
 - bootstrap-secrets.yaml
 - redis.yaml
 - clickhouse.yaml
