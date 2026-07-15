@@ -48,12 +48,13 @@ pub async fn build_app_state(ai_metrics: AiMetrics) -> AppState {
 
     // Iniciar el Spooler en segundo plano con Redis como broker.
     // El Spooler detecta rediss:// y carga REDIS_CA_CERT internamente.
-    let log_path = std::path::PathBuf::from("./logs/audit.ndjson");
-    AuditSpooler::spawn(rx, redis_url, log_path);
+    let log_path = std::path::PathBuf::from("/audit/audit_buffer.db");
+    let spooler_state = AuditSpooler::spawn(rx, redis_url, log_path);
 
     let engine = ZeroTrustEngine::new(&policy)
         .expect("Failed to initialize PDP Engine")
-        .with_audit(tx);
+        .with_audit(tx)
+        .with_spooler_state(spooler_state);
 
     // ── URL de ClickHouse (soporta http:// y https://) ────────────────────────
     // En prod: https://clickhouse:8443/

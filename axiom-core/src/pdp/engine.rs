@@ -72,6 +72,7 @@ pub struct ZeroTrustEngine {
     base_engine: Engine,
     pool: std::sync::Arc<std::sync::Mutex<Vec<Engine>>>,
     audit_sender: Option<UnboundedSender<AuditEvent>>,
+    spooler_state: Option<std::sync::Arc<std::sync::atomic::AtomicU8>>,
 }
 
 impl ZeroTrustEngine {
@@ -87,6 +88,7 @@ impl ZeroTrustEngine {
             base_engine: engine,
             pool: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             audit_sender: None,
+            spooler_state: None,
         })
     }
 
@@ -97,8 +99,55 @@ impl ZeroTrustEngine {
         self
     }
 
+    /// Configura el estado compartido del spooler para el circuito de Panic
+    #[must_use]
+    pub fn with_spooler_state(
+        mut self,
+        state: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    ) -> Self {
+        self.spooler_state = Some(state);
+        self
+    }
+
     /// Evalúa la solicitud contra las políticas de Zero Trust
     pub fn evaluate(&self, request: &ZeroTrustRequest) -> Result<Decision, AxiomError> {
+        // Fail-Closed: Si el spooler está en pánico (2), abortamos instantáneamente.
+        // Se usa Ordering::Relaxed para garantizar que sea 100% lock-free en el hot path.
+        if let Some(state) = &self.spooler_state {
+            if state.load(std::sync::atomic::Ordering::Relaxed) == 2 {
+                if let Some(sender) = &self.audit_sender {
+                    let timestamp_ns = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos();
+
+                    let event = AuditEvent {
+                        timestamp_ns,
+                        session_id: request.session_id.clone(),
+                        user_did: request.user_did.clone(),
+                        resource_hash: request.resource.hash.clone(),
+                        decision: AuditDecision::Deny,
+                        risk_score: 1.0,
+                        context_snapshot: serde_json::json!({
+                            "env": request.context,
+                            "device": { "id": request.device.id },
+                            "denied_by_panic_mode": true
+                        }),
+                        latency_ms: 0.0,
+                    };
+                    let _ = sender.send(event);
+                }
+
+                return Ok(Decision {
+                    allow: false,
+                    requires_2fa: true,
+                    requires_biometric: true,
+                    block: true,
+                    alert: true,
+                });
+            }
+        }
+
         let start_time = Instant::now();
 
         let mut engine = {

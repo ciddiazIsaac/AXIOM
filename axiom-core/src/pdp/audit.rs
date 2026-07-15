@@ -83,48 +83,82 @@ fn extract_master_name(redis_url: &str) -> &str {
     }
 }
 
+use rusqlite::Connection;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// Estado de la máquina de estados del Spooler de auditoría
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SpoolerState {
+    /// Operación normal, eventos se mandan a Redis
+    Normal = 0,
+    /// Redis inalcanzable, encolando localmente (Fail-Open)
+    Degraded = 1,
+    /// Riesgo de agotar buffer, se deniega tráfico (Fail-Closed)
+    Panic = 2,
+}
+
 // ─── Spooler ──────────────────────────────────────────────────────────────────
 
 /// Spooler en segundo plano para persistir eventos de auditoría.
-/// Escribe los eventos en Redis Streams (con TLS si REDIS_URL usa rediss://)
-/// y cae en disco (NDJSON) si Redis no está disponible.
 pub struct AuditSpooler;
 
 impl AuditSpooler {
     /// Inicia el worker en segundo plano.
-    /// Toma el receptor del canal asíncrono, la URL de Redis y la ruta base del archivo.
     pub fn spawn(
-        mut receiver: UnboundedReceiver<AuditEvent>,
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<AuditEvent>,
         redis_url: String,
-        log_path: PathBuf,
-    ) {
+        db_path: std::path::PathBuf,
+    ) -> Arc<AtomicU8> {
+        // Inicializar estado asumiendo Degradado, o Pánico si el disco/buffer ya superó los límites.
+        // Esto cierra la ventana de vulnerabilidad en el reinicio del pod.
+        let mut initial_state = 1; // 1: Degraded (Fail-Open until Redis connection is proven)
+        if let Ok(m) = std::fs::metadata(&db_path) {
+            if m.len() > 900 * 1024 * 1024 {
+                initial_state = 2; // Panic por disco lleno
+            } else if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                let count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM audit_buffer", [], |row| row.get(0))
+                    .unwrap_or(0);
+                if count >= 10_000 {
+                    initial_state = 2; // Panic por límite de eventos
+                }
+            }
+        }
+
+        let state = Arc::new(AtomicU8::new(initial_state));
+        let state_clone = state.clone();
+
         tokio::spawn(async move {
-            // 1. Preparar el fallback en disco (archivo NDJSON)
-            if let Some(parent) = log_path.parent() {
-                let _ = create_dir_all(parent).await;
+            // 1. Preparar SQLite buffer
+            if let Some(parent) = db_path.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
             }
 
-            let mut file_fallback = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-                .await
-                .ok();
+            let conn = Connection::open(&db_path).expect("Failed to open audit buffer");
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS audit_buffer (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data TEXT NOT NULL
+                )",
+                [],
+            )
+            .expect("Failed to create table");
 
-            // 2. Determinar si la URL es Sentinel y si usa TLS
+            let mut redis_con = None;
+            let mut sentinel_client_opt = None;
+            let mut redis_client_opt = None;
+
+            // 2. Determinar si la URL es Sentinel y TLS
             let is_sentinel = redis_url.starts_with("redis+sentinel://")
                 || redis_url.starts_with("rediss+sentinel://");
             let use_tls =
                 redis_url.starts_with("rediss://") || redis_url.starts_with("rediss+sentinel://");
 
-            let mut sentinel_client_opt = None;
-            let mut redis_client_opt = None;
-
-            let mut redis_con = if is_sentinel {
-                let node_url = sentinel_node_url(&redis_url);
-                let master_name = extract_master_name(&redis_url).to_string();
-
-                // Configurar TlsMode::Secure si el esquema es TLS
+            if is_sentinel {
+                let node_url = super::audit::sentinel_node_url(&redis_url);
+                let master_name = super::audit::extract_master_name(&redis_url);
                 let tls_params = if use_tls {
                     Some(
                         redis::sentinel::SentinelNodeConnectionInfo::default()
@@ -140,73 +174,170 @@ impl AuditSpooler {
                     tls_params,
                     redis::sentinel::SentinelServerType::Master,
                 ) {
-                    let con = sentinel_client.get_async_connection().await.ok();
+                    redis_con = sentinel_client.get_async_connection().await.ok();
                     sentinel_client_opt = Some(sentinel_client);
-                    con
-                } else {
-                    None
                 }
             } else {
-                // Conexión directa (dev local sin Sentinel)
                 if let Ok(redis_client) = redis::Client::open(redis_url.as_str()) {
-                    let con = redis_client.get_multiplexed_async_connection().await.ok();
+                    redis_con = redis_client.get_multiplexed_async_connection().await.ok();
                     redis_client_opt = Some(redis_client);
-                    con
-                } else {
-                    None
                 }
+            }
+
+            let mut disconnected_since: Option<Instant> = if redis_con.is_none() {
+                Some(Instant::now())
+            } else {
+                None
+            };
+            let mut connected_since: Option<Instant> = if redis_con.is_some() {
+                Some(Instant::now())
+            } else {
+                None
             };
 
-            // 3. Procesar eventos de la cola
+            // 3. Loop principal
             while let Some(event) = receiver.recv().await {
-                if let Ok(json_string) = serde_json::to_string(&event) {
-                    let mut sent_to_redis = false;
+                let json_string = match serde_json::to_string(&event) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
 
-                    // Intentar enviar a Redis Streams
-                    if let Some(con) = &mut redis_con {
-                        let result: Result<(), redis::RedisError> = con
-                            .xadd("axiom:audit:stream", "*", &[("data", &json_string)])
-                            .await;
+                let mut sent_to_redis = false;
 
-                        if let Err(e) = result {
-                            if e.is_connection_dropped() || e.is_io_error() {
-                                // Intentar reconectar una vez si la conexión se cae
-                                if let Some(sentinel) = sentinel_client_opt.as_mut() {
-                                    if let Ok(new_con) = sentinel.get_async_connection().await {
-                                        redis_con = Some(new_con);
-                                    }
-                                } else if let Some(client) = redis_client_opt.as_ref() {
-                                    if let Ok(new_con) =
-                                        client.get_multiplexed_async_connection().await
-                                    {
-                                        redis_con = Some(new_con);
-                                    }
-                                }
+                if let Some(con) = &mut redis_con {
+                    let result: Result<(), redis::RedisError> = con
+                        .xadd("axiom:audit:stream", "*", &[("data", &json_string)])
+                        .await;
 
-                                // Reintentar xadd con la nueva conexión si tuvimos éxito
-                                if let Some(new_con) = &mut redis_con {
-                                    let retry_result: Result<(), redis::RedisError> = new_con
-                                        .xadd("axiom:audit:stream", "*", &[("data", &json_string)])
-                                        .await;
-                                    if retry_result.is_ok() {
-                                        sent_to_redis = true;
-                                    }
+                    if let Err(e) = result {
+                        if e.is_connection_dropped() || e.is_io_error() {
+                            let mut new_con_opt = None;
+                            if let Some(sentinel) = sentinel_client_opt.as_mut() {
+                                new_con_opt = sentinel.get_async_connection().await.ok();
+                            } else if let Some(client) = redis_client_opt.as_ref() {
+                                new_con_opt = client.get_multiplexed_async_connection().await.ok();
+                            }
+
+                            redis_con = new_con_opt;
+
+                            if let Some(new_con) = &mut redis_con {
+                                let retry_result: Result<(), redis::RedisError> = new_con
+                                    .xadd("axiom:audit:stream", "*", &[("data", &json_string)])
+                                    .await;
+                                if retry_result.is_ok() {
+                                    sent_to_redis = true;
                                 }
                             }
-                        } else {
-                            sent_to_redis = true;
                         }
+                    } else {
+                        sent_to_redis = true;
                     }
+                }
 
-                    // Fallback a disco si Redis falló o no está disponible
-                    if !sent_to_redis {
-                        if let Some(f) = &mut file_fallback {
-                            let log_entry = format!("{json_string}\n");
-                            let _ = f.write_all(log_entry.as_bytes()).await;
+                if sent_to_redis {
+                    if connected_since.is_none() {
+                        connected_since = Some(Instant::now());
+                    }
+                    disconnected_since = None;
+                } else {
+                    if disconnected_since.is_none() {
+                        disconnected_since = Some(Instant::now());
+                    }
+                    connected_since = None;
+                }
+
+                if !sent_to_redis {
+                    let is_panic = event
+                        .context_snapshot
+                        .get("denied_by_panic_mode")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if is_panic {
+                        let panic_log_path = db_path.with_file_name("panic_denials.ndjson");
+                        if let Ok(mut file) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&panic_log_path)
+                        {
+                            // Límite duro de 50MB para el log de rescate. Si se llena, perdemos el registro detallado
+                            // pero el pod no crashea (las métricas pdp_decision_total = DENY seguirán subiendo).
+                            let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+                            if size < 50 * 1024 * 1024 {
+                                use std::io::Write;
+                                let _ = writeln!(file, "{}", json_string);
+                            }
+                        }
+                    } else {
+                        let _ = conn.execute(
+                            "INSERT INTO audit_buffer (data) VALUES (?1)",
+                            rusqlite::params![json_string],
+                        );
+                    }
+                }
+
+                // Evaluar la Máquina de Estados
+                let count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM audit_buffer", [], |row| row.get(0))
+                    .unwrap_or(0);
+                let current_state = state_clone.load(Ordering::SeqCst);
+
+                let db_size = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+                let disk_full = db_size > 900 * 1024 * 1024; // Limite seguro antes de agotar 1Gi
+
+                if current_state == 2 {
+                    let is_stable = connected_since
+                        .map(|t| t.elapsed() >= Duration::from_secs(30))
+                        .unwrap_or(false);
+                    if count < 2000 && is_stable && !disk_full {
+                        state_clone.store(if count > 0 { 1 } else { 0 }, Ordering::SeqCst);
+                    }
+                } else {
+                    let time_exceeded = disconnected_since
+                        .map(|t| t.elapsed() >= Duration::from_secs(300))
+                        .unwrap_or(false);
+                    if count >= 10_000 || time_exceeded || disk_full {
+                        state_clone.store(2, Ordering::SeqCst);
+                    } else if count > 0 || disconnected_since.is_some() {
+                        state_clone.store(1, Ordering::SeqCst);
+                    } else {
+                        state_clone.store(0, Ordering::SeqCst);
+                    }
+                }
+
+                // Flush pending events if connected
+                if sent_to_redis && count > 0 {
+                    let pending: Vec<(i64, String)> = {
+                        let mut stmt = conn
+                            .prepare("SELECT id, data FROM audit_buffer ORDER BY id ASC LIMIT 50")
+                            .unwrap_or_else(|_| panic!("Failed to prepare"));
+                        let rows = stmt
+                            .query_map([], |row| {
+                                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                            })
+                            .unwrap_or_else(|_| panic!("Failed to query_map"));
+                        rows.filter_map(Result::ok).collect()
+                    };
+
+                    for (id, data) in pending {
+                        if let Some(con) = &mut redis_con {
+                            let result: Result<(), redis::RedisError> = con
+                                .xadd("axiom:audit:stream", "*", &[("data", &data)])
+                                .await;
+
+                            if result.is_ok() {
+                                let _ = conn.execute(
+                                    "DELETE FROM audit_buffer WHERE id = ?1",
+                                    rusqlite::params![id],
+                                );
+                            } else {
+                                break; // Paramos el flush si vuelve a fallar
+                            }
                         }
                     }
                 }
             }
         });
+
+        state
     }
 }
